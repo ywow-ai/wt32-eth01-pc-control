@@ -1,0 +1,650 @@
+#include <ETH.h>
+#include <HTTPClient.h>
+#include <LittleFS.h>
+#include <Preferences.h>
+#include <WebServer.h>
+#include "PusherClient.h"
+#include "ft232h_config.h"
+#include "ft232h_support.h"
+
+WebServer server(80);
+PusherClient pusher;
+
+static DeviceConfig g_cfg;
+static bool g_ethHasIp = false;
+static bool g_fsOk = false;
+static String g_sessionId;
+static uint32_t g_factoryHoldStart = 0;
+static bool g_factoryTriggered = false;
+static bool g_pusherStarted = false;
+static String g_discordPending;
+
+static bool sessionValid()
+{
+  if (g_sessionId.isEmpty() || !server.hasHeader("Cookie"))
+    return false;
+  return server.header("Cookie").indexOf("sid=" + g_sessionId) >= 0;
+}
+
+static void clearSession()
+{
+  g_sessionId = "";
+}
+
+static void startSession()
+{
+  g_sessionId = String(esp_random(), HEX) + String(esp_random(), HEX);
+  server.sendHeader("Set-Cookie", "sid=" + g_sessionId + "; Path=/; HttpOnly; SameSite=Lax");
+}
+
+static const char *mimeForPath(const String &path)
+{
+  if (path.endsWith(".css"))
+    return "text/css";
+  if (path.endsWith(".js"))
+    return "application/javascript";
+  if (path.endsWith(".html"))
+    return "text/html";
+  if (path.endsWith(".ico"))
+    return "image/x-icon";
+  return "application/octet-stream";
+}
+
+static bool serveStaticFile(const String &path)
+{
+  if (!g_fsOk || !LittleFS.exists(path))
+    return false;
+  File f = LittleFS.open(path, "r");
+  if (!f)
+    return false;
+  server.streamFile(f, mimeForPath(path));
+  f.close();
+  return true;
+}
+
+static void apiUnauthorized()
+{
+  sendJson(server, 401, "{\"ok\":false,\"error\":\"Unauthorized\"}");
+}
+
+static bool requireAuthApi()
+{
+  if (sessionValid())
+    return true;
+  apiUnauthorized();
+  return false;
+}
+
+static void redirectLogin()
+{
+  server.sendHeader("Location", "/login.html");
+  server.send(302, "text/plain", "");
+}
+
+static void queueDiscord(const String &msg)
+{
+  if (!g_cfg.discordEnabled || g_cfg.discordUrl.isEmpty())
+    return;
+  g_discordPending = msg;
+}
+
+static void pusherOnMessage(const char *data, size_t length)
+{
+  if (!data || length == 0)
+    return;
+  String line;
+  line.reserve(length + 1);
+  for (size_t i = 0; i < length; i++)
+    line += data[i];
+  line.trim();
+  if (!line.startsWith("press,"))
+    return;
+
+  int c1 = line.indexOf(',');
+  int c2 = line.indexOf(',', c1 + 1);
+  String target = c1 >= 0 ? line.substring(c1 + 1, c2 > 0 ? c2 : line.length()) : "";
+  String dur = c2 >= 0 ? line.substring(c2 + 1) : "short";
+  target.trim();
+  dur.trim();
+  target.toLowerCase();
+  dur.toLowerCase();
+
+  gpio_num_t pin;
+  if (target == "power")
+    pin = PIN_OPTO_POWER;
+  else if (target == "reset")
+    pin = PIN_OPTO_RESET;
+  else
+    return;
+
+  uint32_t ms = (dur == "long") ? PULSE_LONG_MS : PULSE_SHORT_MS;
+  optoRequest(pin, ms);
+  ledPulseStart(2);
+  queueDiscord(String("PC control: ") + line);
+}
+
+static void pusherReconnect()
+{
+  g_pusherStarted = false;
+  pusher.disconnect();
+  if (g_cfg.wsHost.isEmpty() || g_cfg.pusherChan.isEmpty())
+    return;
+
+  uint16_t port = 443;
+  if (!g_cfg.wsPort.isEmpty())
+    validatePortString(g_cfg.wsPort, port);
+
+  bool tls = port == 443;
+  String path = g_cfg.wsPath.isEmpty() ? "/" : g_cfg.wsPath;
+  pusher.setMessageHandler(pusherOnMessage);
+  pusher.setReconnectInterval(5000);
+  pusher.begin(g_cfg.wsHost.c_str(), port, path.c_str(), g_cfg.pusherChan.c_str(), tls);
+  g_pusherStarted = true;
+  Serial.println("[Pusher] (re)connect requested");
+}
+
+static bool applyStaticEthConfig()
+{
+  if (g_cfg.ipMode != "static")
+    return true;
+  if (!validateIpv4(g_cfg.ipAddr) || !validateIpv4(g_cfg.subnet) || !validateIpv4(g_cfg.gateway))
+    return false;
+
+  IPAddress ip, gw, sn, d1(8, 8, 8, 8), d2;
+  if (!ip.fromString(g_cfg.ipAddr) || !gw.fromString(g_cfg.gateway) || !sn.fromString(g_cfg.subnet))
+    return false;
+  if (!g_cfg.dns1.isEmpty())
+    d1.fromString(g_cfg.dns1);
+  if (!g_cfg.dns2.isEmpty())
+    d2.fromString(g_cfg.dns2);
+  return ETH.config(ip, gw, sn, d1, d2);
+}
+
+static void loadConfig()
+{
+  nvsLoadConfig(g_cfg);
+}
+
+static String buildConfigJson()
+{
+  String j = "{";
+  j += "\"ok\":true,";
+  j += "\"theme_mode\":\"" + jsonEscape(g_cfg.themeMode.isEmpty() ? "system" : g_cfg.themeMode) + "\",";
+  j += "\"ip_mode\":\"" + jsonEscape(g_cfg.ipMode.isEmpty() ? "dhcp" : g_cfg.ipMode) + "\",";
+  j += "\"ip_addr\":\"" + jsonEscape(g_cfg.ipAddr) + "\",";
+  j += "\"subnet\":\"" + jsonEscape(g_cfg.subnet) + "\",";
+  j += "\"gateway\":\"" + jsonEscape(g_cfg.gateway) + "\",";
+  j += "\"dns1\":\"" + jsonEscape(g_cfg.dns1) + "\",";
+  j += "\"dns2\":\"" + jsonEscape(g_cfg.dns2) + "\",";
+  j += "\"pusher_chan\":\"" + jsonEscape(g_cfg.pusherChan) + "\",";
+  j += "\"ws_host\":\"" + jsonEscape(g_cfg.wsHost) + "\",";
+  j += "\"ws_port\":\"" + jsonEscape(g_cfg.wsPort) + "\",";
+  j += "\"ws_path\":\"" + jsonEscape(g_cfg.wsPath) + "\",";
+  j += "\"pusher_key\":\"" + jsonEscape(g_cfg.pusherKey) + "\",";
+  j += "\"pusher_cluster\":\"" + jsonEscape(g_cfg.pusherCluster) + "\",";
+  j += "\"discord_enabled\":" + String(g_cfg.discordEnabled ? "true" : "false") + ",";
+  j += "\"discord_url\":\"" + jsonEscape(g_cfg.discordUrl) + "\",";
+  j += "\"discord_username\":\"" + jsonEscape(g_cfg.discordUsername) + "\",";
+  j += "\"discord_events\":\"" + jsonEscape(g_cfg.discordEvents) + "\"";
+  j += "}";
+  return j;
+}
+
+static void handleApiSession()
+{
+  if (sessionValid())
+    sendJson(server, 200, "{\"ok\":true}");
+  else
+    apiUnauthorized();
+}
+
+static void handleApiLogin()
+{
+  if (!server.hasArg("password"))
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Password required\"}");
+    return;
+  }
+  if (server.arg("password") == nvsReadPassword())
+  {
+    startSession();
+    sendJson(server, 200, "{\"ok\":true}");
+    return;
+  }
+  sendJson(server, 401, "{\"ok\":false,\"error\":\"Invalid password\"}");
+}
+
+static void handleApiLogout()
+{
+  clearSession();
+  server.sendHeader("Set-Cookie", "sid=; Path=/; HttpOnly; Max-Age=0");
+  sendJson(server, 200, "{\"ok\":true}");
+}
+
+static void handleApiConfig()
+{
+  if (!requireAuthApi())
+    return;
+  sendJson(server, 200, buildConfigJson());
+}
+
+static void handleApiTheme()
+{
+  if (!requireAuthApi())
+    return;
+  String mode = server.arg("theme_mode");
+  if (!validateTheme(mode))
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Invalid theme\"}");
+    return;
+  }
+  if (!nvsSaveTheme(mode))
+  {
+    sendJson(server, 500, "{\"ok\":false,\"error\":\"NVS save failed\"}");
+    return;
+  }
+  g_cfg.themeMode = mode;
+  sendJson(server, 200, "{\"ok\":true}");
+}
+
+static void handleApiStatus()
+{
+  if (!requireAuthApi())
+    return;
+
+  String ip = g_ethHasIp ? ETH.localIP().toString() : "";
+  String gw = g_ethHasIp ? ETH.gatewayIP().toString() : "";
+  String mask = g_ethHasIp ? ETH.subnetMask().toString() : "";
+  String dns = g_ethHasIp ? ETH.dnsIP().toString() : "";
+  if (dns == "0.0.0.0")
+    dns = "";
+
+  String linkText;
+  if (g_ethHasIp)
+    linkText = (g_cfg.ipMode == "static") ? "Up (static)" : "Up (DHCP)";
+  else
+    linkText = EMPTY_LABEL;
+
+  String json = "{";
+  json += "\"ok\":true,";
+  json += "\"link\":" + String(g_ethHasIp ? "true" : "false") + ",";
+  json += "\"link_text\":\"" + jsonEscape(linkText) + "\",";
+  json += "\"ip\":\"" + jsonEscape(ip) + "\",";
+  json += "\"gateway\":\"" + jsonEscape(gw) + "\",";
+  json += "\"subnet\":\"" + jsonEscape(mask) + "\",";
+  json += "\"dns\":\"" + jsonEscape(dns) + "\",";
+  json += "\"mac\":\"" + jsonEscape(ETH.macAddress()) + "\",";
+  json += "\"hostname\":\"" + jsonEscape(String(ETH.getHostname() ? ETH.getHostname() : "pc-control-eth")) + "\",";
+  json += "\"chip\":\"" + jsonEscape(String(ESP.getChipModel())) + "\",";
+  json += "\"uptime_sec\":" + String(millis() / 1000) + ",";
+  json += "\"free_heap\":" + String(ESP.getFreeHeap());
+  json += "}";
+
+  sendJson(server, 200, json);
+}
+
+static void handleApiPress()
+{
+  if (!requireAuthApi())
+    return;
+
+  String target = server.arg("target");
+  String dur = server.arg("dur");
+  target.trim();
+  dur.trim();
+  target.toLowerCase();
+  dur.toLowerCase();
+
+  gpio_num_t pin;
+  if (target == "power")
+    pin = PIN_OPTO_POWER;
+  else if (target == "reset")
+    pin = PIN_OPTO_RESET;
+  else
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Invalid target\"}");
+    return;
+  }
+  if (dur != "short" && dur != "long")
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Invalid duration\"}");
+    return;
+  }
+  if (optoBusy())
+  {
+    sendJson(server, 409, "{\"ok\":false,\"error\":\"Opto busy\"}");
+    return;
+  }
+
+  uint32_t ms = (dur == "long") ? PULSE_LONG_MS : PULSE_SHORT_MS;
+  optoRequest(pin, ms);
+  ledPulseStart(2);
+  queueDiscord(String("Web press ") + target + " " + dur);
+  sendJson(server, 200, "{\"ok\":true}");
+}
+
+static void handleApiPassword()
+{
+  if (!requireAuthApi())
+    return;
+
+  String p1 = server.arg("newpass");
+  String p2 = server.arg("newpass2");
+  if (p1.length() < 8)
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Min 8 characters\"}");
+    return;
+  }
+  if (p1 != p2)
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Passwords do not match\"}");
+    return;
+  }
+  if (!nvsSavePassword(p1))
+  {
+    sendJson(server, 500, "{\"ok\":false,\"error\":\"NVS save failed\"}");
+    return;
+  }
+  sendJson(server, 200, "{\"ok\":true}");
+}
+
+static void fillCfgNetworkFromArgs(DeviceConfig &cfg)
+{
+  cfg.ipMode = server.arg("ip_mode");
+  cfg.ipAddr = server.arg("ip_addr");
+  cfg.subnet = server.arg("subnet");
+  cfg.gateway = server.arg("gateway");
+  cfg.dns1 = server.arg("dns1");
+  cfg.dns2 = server.arg("dns2");
+}
+
+static void handleApiNetwork()
+{
+  if (!requireAuthApi())
+    return;
+  DeviceConfig tmp = g_cfg;
+  fillCfgNetworkFromArgs(tmp);
+  if (!nvsSaveNetwork(tmp))
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Invalid network config\"}");
+    return;
+  }
+  g_cfg = tmp;
+  sendJson(server, 200, "{\"ok\":true,\"reboot\":true}");
+  delay(300);
+  ESP.restart();
+}
+
+static void handleApiNetworkRenew()
+{
+  if (!requireAuthApi())
+    return;
+  if (g_cfg.ipMode != "dhcp")
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Not in DHCP mode\"}");
+    return;
+  }
+  sendJson(server, 200, "{\"ok\":true}");
+  delay(300);
+  ESP.restart();
+}
+
+static void handleApiPusher()
+{
+  if (!requireAuthApi())
+    return;
+  DeviceConfig tmp = g_cfg;
+  tmp.pusherChan = server.arg("pusher_chan");
+  tmp.wsHost = server.arg("ws_host");
+  tmp.wsPort = server.arg("ws_port");
+  tmp.wsPath = server.arg("ws_path");
+  tmp.pusherKey = server.arg("pusher_key");
+  tmp.pusherCluster = server.arg("pusher_cluster");
+  if (!nvsSavePusher(tmp))
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Invalid Pusher config\"}");
+    return;
+  }
+  g_cfg = tmp;
+  pusherReconnect();
+  sendJson(server, 200, "{\"ok\":true}");
+}
+
+static void handleApiDiscord()
+{
+  if (!requireAuthApi())
+    return;
+  DeviceConfig tmp = g_cfg;
+  tmp.discordEnabled = server.arg("discord_enabled") == "1" || server.arg("discord_enabled") == "true";
+  tmp.discordUrl = server.arg("discord_url");
+  tmp.discordUsername = server.arg("discord_username");
+  tmp.discordEvents = server.arg("discord_events");
+  if (!nvsSaveDiscord(tmp))
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Invalid Discord config\"}");
+    return;
+  }
+  g_cfg = tmp;
+  sendJson(server, 200, "{\"ok\":true}");
+}
+
+static bool sendDiscordWebhook(const String &content)
+{
+  if (!validateDiscordUrl(g_cfg.discordUrl))
+    return false;
+  HTTPClient http;
+  http.setTimeout(4000);
+  if (!http.begin(g_cfg.discordUrl))
+    return false;
+  http.addHeader("Content-Type", "application/json");
+  String user = g_cfg.discordUsername.isEmpty() ? "PC Control" : g_cfg.discordUsername;
+  String body = String("{\"username\":\"") + jsonEscape(user) + "\",\"content\":\"" + jsonEscape(content) + "\"}";
+  int code = http.POST(body);
+  http.end();
+  return code >= 200 && code < 300;
+}
+
+static void handleApiDiscordTest()
+{
+  if (!requireAuthApi())
+    return;
+  if (!g_cfg.discordEnabled)
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Discord disabled\"}");
+    return;
+  }
+  if (!sendDiscordWebhook("PC Control webhook test"))
+  {
+    sendJson(server, 502, "{\"ok\":false,\"error\":\"Webhook POST failed\"}");
+    return;
+  }
+  sendJson(server, 200, "{\"ok\":true}");
+}
+
+static void handleApiRestart()
+{
+  if (!requireAuthApi())
+    return;
+  Serial.println("[SYS] restart (web)");
+  sendJson(server, 200, "{\"ok\":true}");
+  delay(300);
+  ESP.restart();
+}
+
+static void handleApiNvsClear()
+{
+  if (!requireAuthApi())
+    return;
+  if (server.arg("confirm") != "yes")
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Confirm required\"}");
+    return;
+  }
+  Serial.println("[NVS] clear (web)");
+  nvsClearAll();
+  clearSession();
+  sendJson(server, 200, "{\"ok\":true}");
+  delay(300);
+  ESP.restart();
+}
+
+static void handleStatic()
+{
+  String uri = server.uri();
+  if (uri == "/")
+    uri = "/index.html";
+
+  if (uri == "/index.html" && !sessionValid())
+  {
+    redirectLogin();
+    return;
+  }
+
+  if (uri == "/login.html" && sessionValid())
+  {
+    server.sendHeader("Location", "/index.html");
+    server.send(302, "text/plain", "");
+    return;
+  }
+
+  if (serveStaticFile(uri))
+    return;
+
+  if (uri.startsWith("/api/"))
+    sendJson(server, 404, "{\"ok\":false,\"error\":\"Not found\"}");
+  else if (!sessionValid())
+    redirectLogin();
+  else
+    serveStaticFile("/index.html");
+}
+
+static void onEthEvent(arduino_event_id_t event)
+{
+  switch (event)
+  {
+  case ARDUINO_EVENT_ETH_START:
+    ETH.setHostname("pc-control-eth");
+    break;
+  case ARDUINO_EVENT_ETH_GOT_IP:
+    g_ethHasIp = true;
+    digitalWrite(PIN_LED_STATUS, HIGH);
+    Serial.print("[ETH] IP ");
+    Serial.println(ETH.localIP());
+    break;
+  case ARDUINO_EVENT_ETH_LOST_IP:
+  case ARDUINO_EVENT_ETH_DISCONNECTED:
+    g_ethHasIp = false;
+    digitalWrite(PIN_LED_STATUS, LOW);
+    break;
+  default:
+    break;
+  }
+}
+
+static void setupWebRoutes()
+{
+  server.on("/api/session", HTTP_GET, handleApiSession);
+  server.on("/api/login", HTTP_POST, handleApiLogin);
+  server.on("/api/logout", HTTP_POST, handleApiLogout);
+  server.on("/api/config", HTTP_GET, handleApiConfig);
+  server.on("/api/theme", HTTP_POST, handleApiTheme);
+  server.on("/api/status", HTTP_GET, handleApiStatus);
+  server.on("/api/press", HTTP_POST, handleApiPress);
+  server.on("/api/password", HTTP_POST, handleApiPassword);
+  server.on("/api/network", HTTP_POST, handleApiNetwork);
+  server.on("/api/network/renew", HTTP_POST, handleApiNetworkRenew);
+  server.on("/api/pusher", HTTP_POST, handleApiPusher);
+  server.on("/api/discord", HTTP_POST, handleApiDiscord);
+  server.on("/api/discord/test", HTTP_POST, handleApiDiscordTest);
+  server.on("/api/restart", HTTP_POST, handleApiRestart);
+  server.on("/api/nvs/clear", HTTP_POST, handleApiNvsClear);
+  server.onNotFound(handleStatic);
+}
+
+static void pollFactoryButton()
+{
+  bool down = digitalRead(PIN_BTN_FACTORY) == LOW;
+  uint32_t now = millis();
+  if (!down)
+  {
+    g_factoryHoldStart = 0;
+    g_factoryTriggered = false;
+    return;
+  }
+  if (g_factoryTriggered)
+    return;
+  if (g_factoryHoldStart == 0)
+    g_factoryHoldStart = now;
+  uint32_t held = now - g_factoryHoldStart;
+  if ((held / 300) % 2 == 0)
+    digitalWrite(PIN_LED_STATUS, HIGH);
+  else
+    digitalWrite(PIN_LED_STATUS, LOW);
+  if (held >= FACTORY_HOLD_MS)
+  {
+    g_factoryTriggered = true;
+    nvsClearAll();
+    clearSession();
+    Serial.println("[NVS] factory clear");
+    delay(200);
+    ESP.restart();
+  }
+}
+
+static void pollDiscord()
+{
+  if (g_discordPending.isEmpty())
+    return;
+  String msg = g_discordPending;
+  g_discordPending = "";
+  sendDiscordWebhook(msg);
+}
+
+void setup()
+{
+  pinMode(PIN_LED_STATUS, OUTPUT);
+  pinMode(PIN_BTN_FACTORY, INPUT);
+  digitalWrite(PIN_LED_STATUS, LOW);
+  optoInit();
+
+  Serial.begin(SERIAL_BAUD);
+  delay(200);
+  Serial.println("[BOOT] pc_control ETH");
+
+  g_fsOk = LittleFS.begin(false);
+  if (!g_fsOk)
+    Serial.println("[FS] LittleFS mount failed (upload data/ image)");
+
+  loadConfig();
+  if (g_cfg.themeMode.isEmpty())
+    g_cfg.themeMode = "system";
+
+  Network.onEvent(onEthEvent);
+  applyStaticEthConfig();
+  ETH.begin();
+  setupWebRoutes();
+  server.begin();
+
+  pusherReconnect();
+
+  Serial.println("[WEB] HTTP :80 session cookie (browser close = re-login)");
+}
+
+void loop()
+{
+  server.handleClient();
+  optoPoll();
+  ledPulsePoll();
+  pollFactoryButton();
+  pollDiscord();
+  if (g_pusherStarted)
+    pusher.loop();
+
+  static uint32_t lastBeat = 0;
+  if (millis() - lastBeat >= 5000)
+  {
+    lastBeat = millis();
+    if (g_ethHasIp)
+      Serial.printf("[alive] http://%s/\n", ETH.localIP().toString().c_str());
+  }
+}

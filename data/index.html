@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PC Control</title>
+    <script src="/js/theme-init.js"></script>
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body>
+    <div class="topbar">
+      <div>
+        <h1>PC Control</h1>
+        <div class="sub">ESP32 Ethernet</div>
+      </div>
+      <div class="topbar-ip" id="topbar-ip">()</div>
+    </div>
+
+    <div class="layout">
+      <nav class="nav" aria-label="Main">
+        <a href="#dashboard">Dashboard</a>
+        <a href="#control">PC control</a>
+        <span class="nav-section">Settings</span>
+        <a href="#settings-password">Password</a>
+        <a href="#settings-appearance">Appearance</a>
+        <a href="#settings-network">Network</a>
+        <a href="#settings-pusher">Pusher</a>
+        <a href="#settings-discord">Discord</a>
+        <a href="#system">System</a>
+        <a href="#" id="nav-logout" class="nav-out">Sign out</a>
+      </nav>
+
+      <main class="main">
+        <section id="dashboard" class="section">
+          <h2 class="section-title">Dashboard</h2>
+          <div class="card">
+            <h2>Network</h2>
+            <div class="stat"><b>Link</b> <span id="st-link">()</span></div>
+            <div class="stat"><b>IP</b> <span id="st-ip">()</span></div>
+            <div class="stat"><b>Gateway</b> <span id="st-gw">()</span></div>
+            <div class="stat"><b>Subnet</b> <span id="st-mask">()</span></div>
+            <div class="stat"><b>DNS</b> <span id="st-dns">()</span></div>
+            <div class="stat"><b>MAC</b> <span id="st-mac">()</span></div>
+            <div class="stat"><b>Hostname</b> <span id="st-host">()</span></div>
+          </div>
+          <div class="card">
+            <h2>Device</h2>
+            <div class="stat"><b>Chip</b> <span id="st-chip">()</span></div>
+            <div class="stat"><b>Uptime</b> <span id="st-uptime">()</span></div>
+            <div class="stat">
+              <b>Free heap</b> <span id="st-heap">()</span>
+            </div>
+          </div>
+        </section>
+
+        <section id="control" class="section">
+          <h2 class="section-title">PC control</h2>
+          <div class="card">
+            <h2>Opto (PWR / RESET)</h2>
+            <p class="hint">Pulse to motherboard front-panel headers.</p>
+            <div id="ctrl-msg" class="msg hidden"></div>
+            <div class="btn-row">
+              <button
+                type="button"
+                class="btn btn-primary"
+                data-press="power"
+                data-dur="short"
+              >
+                Power
+              </button>
+              <button
+                type="button"
+                class="btn btn-secondary"
+                data-press="power"
+                data-dur="long"
+              >
+                Power (hold)
+              </button>
+              <button
+                type="button"
+                class="btn btn-primary"
+                data-press="reset"
+                data-dur="short"
+              >
+                Restart
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section id="settings-password" class="section">
+          <h2 class="section-title">Settings | Password</h2>
+          <div class="card">
+            <h2>Web login password</h2>
+            <div id="pw-msg" class="msg hidden"></div>
+            <form id="form-password">
+              <label for="newpass">New password (min 8)</label>
+              <input
+                type="password"
+                id="newpass"
+                name="newpass"
+                autocomplete="new-password"
+                required
+                minlength="8"
+              />
+              <label for="newpass2">Confirm password</label>
+              <input
+                type="password"
+                id="newpass2"
+                name="newpass2"
+                autocomplete="new-password"
+                required
+                minlength="8"
+              />
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary">
+                  Save password
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section id="settings-appearance" class="section">
+          <h2 class="section-title">Settings | Appearance</h2>
+          <div class="card">
+            <h2>Theme</h2>
+            <p class="hint">Saved to device NVS.</p>
+            <div class="radio-block" id="form-appearance">
+              <label class="choice">
+                <input type="radio" name="theme_mode" value="system" />
+                <span><strong>System</strong> (follow OS)</span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="theme_mode" value="light" />
+                <span><strong>Light</strong></span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="theme_mode" value="dark" />
+                <span><strong>Dark</strong></span>
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <section id="settings-network" class="section">
+          <h2 class="section-title">Settings | Network</h2>
+          <div class="card">
+            <h2>IPv4 (Ethernet)</h2>
+            <div id="net-msg" class="msg hidden"></div>
+            <form id="form-network">
+              <div class="radio-block">
+                <label class="choice">
+                  <input type="radio" name="ip_mode" value="dhcp" />
+                  <span
+                    ><strong>Obtain an IP address automatically</strong>
+                    (DHCP)</span
+                  >
+                </label>
+                <label class="choice">
+                  <input type="radio" name="ip_mode" value="static" />
+                  <span
+                    ><strong>Use the following IP address</strong>
+                    (static)</span
+                  >
+                </label>
+              </div>
+              <div class="static-fields">
+                <label for="ip_addr">IP address</label>
+                <input
+                  type="text"
+                  id="ip_addr"
+                  name="ip_addr"
+                  placeholder="192.168.1.50"
+                />
+                <label for="subnet">Subnet mask</label>
+                <input
+                  type="text"
+                  id="subnet"
+                  name="subnet"
+                  placeholder="255.255.255.0"
+                />
+                <label for="gateway">Default gateway</label>
+                <input
+                  type="text"
+                  id="gateway"
+                  name="gateway"
+                  placeholder="192.168.1.1"
+                />
+                <label for="dns1">Preferred DNS</label>
+                <input
+                  type="text"
+                  id="dns1"
+                  name="dns1"
+                  placeholder="8.8.8.8"
+                />
+                <label for="dns2">Alternate DNS</label>
+                <input type="text" id="dns2" name="dns2" placeholder="()" />
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary">
+                  Save network
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary"
+                  id="btn-dhcp-renew"
+                >
+                  Renew DHCP
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section id="settings-pusher" class="section">
+          <h2 class="section-title">Settings | Pusher</h2>
+          <div class="card">
+            <h2>Pusher / WebSocket</h2>
+            <div id="push-msg" class="msg hidden"></div>
+            <form id="form-pusher">
+              <label for="pusher_chan">Channel name</label>
+              <input type="text" id="pusher_chan" name="pusher_chan" />
+              <label for="ws_host">WebSocket host</label>
+              <input type="text" id="ws_host" name="ws_host" />
+              <label for="ws_port">WebSocket port</label>
+              <input
+                type="text"
+                id="ws_port"
+                name="ws_port"
+                placeholder="443"
+              />
+              <label for="ws_path">WebSocket path</label>
+              <input type="text" id="ws_path" name="ws_path" />
+              <label for="pusher_key">Pusher app key</label>
+              <input
+                type="text"
+                id="pusher_key"
+                name="pusher_key"
+                autocomplete="off"
+              />
+              <label for="pusher_cluster">Cluster</label>
+              <input
+                type="text"
+                id="pusher_cluster"
+                name="pusher_cluster"
+                placeholder="ap1"
+              />
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary">
+                  Save Pusher
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section id="settings-discord" class="section">
+          <h2 class="section-title">Settings | Discord</h2>
+          <div class="card">
+            <h2>Webhook</h2>
+            <div id="disc-msg" class="msg hidden"></div>
+            <form id="form-discord">
+              <label class="label-inline" for="discord_enabled">
+                <input
+                  type="checkbox"
+                  id="discord_enabled"
+                  name="discord_enabled"
+                />
+                Enable webhook
+              </label>
+              <label for="discord_url">Webhook URL</label>
+              <input type="url" id="discord_url" name="discord_url" />
+              <label for="discord_username">Bot name (optional)</label>
+              <input
+                type="text"
+                id="discord_username"
+                name="discord_username"
+              />
+              <label for="discord_events">Events (comma-separated)</label>
+              <textarea
+                id="discord_events"
+                name="discord_events"
+                placeholder="power, reset"
+              ></textarea>
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary">
+                  Save Discord
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary"
+                  id="btn-discord-test"
+                >
+                  Send test
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section id="system" class="section">
+          <h2 class="section-title">System</h2>
+          <div class="card">
+            <h2>Restart ESP32</h2>
+            <p class="hint">Soft reboot (web disconnects briefly).</p>
+            <div class="form-actions">
+              <button
+                type="button"
+                class="btn btn-secondary"
+                id="btn-esp-restart"
+              >
+                Restart ESP32
+              </button>
+            </div>
+          </div>
+          <div class="card">
+            <h2>Clear NVS</h2>
+            <p class="hint">
+              Erases all saved settings. Password returns to default (12345678).
+              ESP32 reboots.
+            </p>
+            <div class="form-actions">
+              <button type="button" class="btn btn-danger" id="btn-nvs-clear">
+                Clear NVS
+              </button>
+            </div>
+            <p id="nvs-msg" class="form-msg" hidden></p>
+          </div>
+          <div class="card">
+            <h2>Factory reset (NVS)</h2>
+            <p>
+              Hold <strong>factory</strong> button (GPIO35 to GND) for
+              <strong>5 s</strong>.
+            </p>
+            <p class="hint">Same as Clear NVS (hardware).</p>
+          </div>
+          <div class="card">
+            <h2>GPIO map</h2>
+            <div class="stat"><b>Opto power</b> GPIO 13</div>
+            <div class="stat"><b>Opto reset</b> GPIO 14</div>
+            <div class="stat"><b>LED status</b> GPIO 4</div>
+            <div class="stat"><b>Factory btn</b> GPIO 35</div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="/js/theme.js"></script>
+    <script src="/js/app.js"></script>
+  </body>
+</html>

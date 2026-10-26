@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Login | PC Control</title>
+    <script src="/js/theme-init.js"></script>
+    <link rel="stylesheet" href="/css/app.css" />
+    <link rel="stylesheet" href="/css/login.css" />
+  </head>
+  <body>
+    <div class="login-wrap">
+      <div class="login-box">
+        <h1>PC Control</h1>
+        <p class="lead">Administrator password</p>
+        <div id="login-msg" class="msg msg-err hidden"></div>
+        <form id="form-login">
+          <label for="login-password">Password</label>
+          <input
+            type="password"
+            id="login-password"
+            name="password"
+            autocomplete="current-password"
+            required
+          />
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Sign in</button>
+          </div>
+        </form>
+        <p class="foot">Default: 12345678 (change after first login)</p>
+      </div>
+    </div>
+    <script src="/js/theme.js"></script>
+    <script src="/js/app.js"></script>
+  </body>
+</html>
