@@ -103,6 +103,19 @@
     $("discord_url").value = c.discord_url || "";
     $("discord_username").value = c.discord_username || "";
     $("discord_events").value = c.discord_events || "";
+
+    var defCpu = 80;
+    var defDelay = 10;
+    if ($("cpu_mhz")) {
+      var cpu = parseInt(c.cpu_mhz, 10);
+      $("cpu_mhz").value =
+        [80, 160, 240].indexOf(cpu) >= 0 ? String(cpu) : String(defCpu);
+    }
+    if ($("loop_delay_ms")) {
+      var d = parseInt(c.loop_delay_ms, 10);
+      $("loop_delay_ms").value =
+        !isNaN(d) && d >= 0 && d <= 100 ? String(d) : String(defDelay);
+    }
   }
 
   async function loadConfig() {
@@ -147,6 +160,10 @@
           showMsg($("pw-msg"), "Min 8 characters", false);
           return;
         }
+        if (fd.get("newpass").length > 64) {
+          showMsg($("pw-msg"), "Max 64 characters", false);
+          return;
+        }
         if (fd.get("newpass") !== fd.get("newpass2")) {
           showMsg($("pw-msg"), "Passwords do not match", false);
           return;
@@ -185,7 +202,7 @@
         }
         try {
           await api("/api/network", { method: "POST", body: fd });
-          showMsg($("net-msg"), "Saved (reboot may be required)", true);
+          showMsg($("net-msg"), "Saved, rebooting...", true);
         } catch (err) {
           showMsg(
             $("net-msg"),
@@ -262,7 +279,7 @@
         hideMsg($("disc-msg"));
         try {
           await api("/api/discord/test", { method: "POST" });
-          showMsg($("disc-msg"), "Test sent", true);
+          showMsg($("disc-msg"), "Test queued", true);
         } catch (err) {
           showMsg(
             $("disc-msg"),
@@ -291,6 +308,35 @@
       });
     });
 
+    $("form-performance") &&
+      $("form-performance").addEventListener("submit", async function (e) {
+        e.preventDefault();
+        hideMsg($("perf-msg"));
+        var cpu = parseInt($("cpu_mhz").value, 10);
+        var delayMs = parseInt($("loop_delay_ms").value, 10);
+        if ([80, 160, 240].indexOf(cpu) < 0) {
+          showMsg($("perf-msg"), "CPU MHz must be 80, 160, or 240", false);
+          return;
+        }
+        if (isNaN(delayMs) || delayMs < 0 || delayMs > 100) {
+          showMsg($("perf-msg"), "Loop delay must be 0 to 100", false);
+          return;
+        }
+        var fd = new FormData();
+        fd.append("cpu_mhz", String(cpu));
+        fd.append("loop_delay_ms", String(delayMs));
+        try {
+          await api("/api/performance", { method: "POST", body: fd });
+          showMsg($("perf-msg"), "Saved", true);
+        } catch (err) {
+          showMsg(
+            $("perf-msg"),
+            (err.body && err.body.error) || "Save failed",
+            false,
+          );
+        }
+      });
+
     $("btn-esp-restart") &&
       $("btn-esp-restart").addEventListener("click", async function () {
         if (!confirm("Restart ESP32 now?")) return;
@@ -313,7 +359,7 @@
         fd.append("confirm", "yes");
         try {
           await api("/api/nvs/clear", { method: "POST", body: fd });
-          showMsg($("nvs-msg"), "Rebooting…", true);
+          showMsg($("nvs-msg"), "Rebooting...", true);
         } catch (err) {
           showMsg(
             $("nvs-msg"),

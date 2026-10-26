@@ -1,23 +1,24 @@
 #include <ETH.h>
-#include <HTTPClient.h>
 #include <LittleFS.h>
 #include <Preferences.h>
 #include <WebServer.h>
 #include "PusherClient.h"
-#include "ft232h_config.h"
-#include "ft232h_support.h"
+#include "wt32_config.h"
+#include "wt32_discord.h"
+#include "wt32_pusher_cmd.h"
+#include "wt32_support.h"
 
 WebServer server(80);
 PusherClient pusher;
 
-static DeviceConfig g_cfg;
+DeviceConfig g_cfg;
 static bool g_ethHasIp = false;
 static bool g_fsOk = false;
 static String g_sessionId;
 static uint32_t g_factoryHoldStart = 0;
 static bool g_factoryTriggered = false;
 static bool g_pusherStarted = false;
-static String g_discordPending;
+static uint32_t g_loopDelayMs = DEFAULT_LOOP_DELAY_MS;
 
 static bool sessionValid()
 {
@@ -81,46 +82,74 @@ static void redirectLogin()
   server.send(302, "text/plain", "");
 }
 
-static void queueDiscord(const String &msg)
+static void queueDiscordPress(const String &target, const String &msg)
 {
   if (!g_cfg.discordEnabled || g_cfg.discordUrl.isEmpty())
     return;
-  g_discordPending = msg;
+  if (!discordAllowsTarget(g_cfg.discordEvents, target))
+    return;
+  if (!discordEnqueue(msg))
+    Serial.println("[Discord] queue full");
 }
 
-static void pusherOnMessage(const char *data, size_t length)
+static bool parsePressArgs(const String &line, String &target, String &dur)
 {
-  if (!data || length == 0)
-    return;
-  String line;
-  line.reserve(length + 1);
-  for (size_t i = 0; i < length; i++)
-    line += data[i];
-  line.trim();
   if (!line.startsWith("press,"))
-    return;
-
+    return false;
   int c1 = line.indexOf(',');
   int c2 = line.indexOf(',', c1 + 1);
-  String target = c1 >= 0 ? line.substring(c1 + 1, c2 > 0 ? c2 : line.length()) : "";
-  String dur = c2 >= 0 ? line.substring(c2 + 1) : "short";
+  target = c1 >= 0 ? line.substring(c1 + 1, c2 > 0 ? c2 : line.length()) : "";
+  dur = c2 >= 0 ? line.substring(c2 + 1) : "short";
   target.trim();
   dur.trim();
   target.toLowerCase();
   dur.toLowerCase();
+  if (dur != "short" && dur != "long")
+    return false;
+  return target == "power" || target == "reset";
+}
 
+static bool runOptoPress(const String &target, const String &dur)
+{
   gpio_num_t pin;
   if (target == "power")
     pin = PIN_OPTO_POWER;
   else if (target == "reset")
     pin = PIN_OPTO_RESET;
   else
-    return;
+    return false;
 
   uint32_t ms = (dur == "long") ? PULSE_LONG_MS : PULSE_SHORT_MS;
   optoRequest(pin, ms);
   ledPulseStart(2);
-  queueDiscord(String("PC control: ") + line);
+  return true;
+}
+
+static void pusherOnMessage(const char *data, size_t length)
+{
+  if (!data || length == 0)
+    return;
+
+  String line;
+  if (!extractPusherCommand(data, length, line))
+    return;
+  line.trim();
+
+  String target, dur;
+  if (!parsePressArgs(line, target, dur))
+    return;
+
+  if (optoBusy())
+  {
+    Serial.println("[Pusher] opto busy");
+    return;
+  }
+
+  if (!runOptoPress(target, dur))
+    return;
+
+  queueDiscordPress(target, String("PC control: ") + line);
+  Serial.printf("[Pusher] rx: %s\n", line.c_str());
 }
 
 static void pusherReconnect()
@@ -135,7 +164,11 @@ static void pusherReconnect()
     validatePortString(g_cfg.wsPort, port);
 
   bool tls = port == 443;
-  String path = g_cfg.wsPath.isEmpty() ? "/" : g_cfg.wsPath;
+  String path = g_cfg.wsPath;
+  if (path.isEmpty() && !g_cfg.pusherKey.isEmpty())
+    path = String("/app/") + g_cfg.pusherKey;
+  if (path.isEmpty())
+    path = "/";
   pusher.setMessageHandler(pusherOnMessage);
   pusher.setReconnectInterval(5000);
   pusher.begin(g_cfg.wsHost.c_str(), port, path.c_str(), g_cfg.pusherChan.c_str(), tls);
@@ -160,9 +193,24 @@ static bool applyStaticEthConfig()
   return ETH.config(ip, gw, sn, d1, d2);
 }
 
+static void applyPerformanceDefaults()
+{
+  if (!validateCpuMhz(g_cfg.cpuMhz))
+    g_cfg.cpuMhz = DEFAULT_CPU_MHZ;
+  if (!validateLoopDelayMs(g_cfg.loopDelayMs))
+    g_cfg.loopDelayMs = DEFAULT_LOOP_DELAY_MS;
+  g_loopDelayMs = g_cfg.loopDelayMs;
+  applyCpuMhz(g_cfg.cpuMhz);
+}
+
 static void loadConfig()
 {
-  nvsLoadConfig(g_cfg);
+  if (!nvsLoadConfig(g_cfg))
+  {
+    g_cfg.cpuMhz = DEFAULT_CPU_MHZ;
+    g_cfg.loopDelayMs = DEFAULT_LOOP_DELAY_MS;
+  }
+  applyPerformanceDefaults();
 }
 
 static String buildConfigJson()
@@ -185,7 +233,10 @@ static String buildConfigJson()
   j += "\"discord_enabled\":" + String(g_cfg.discordEnabled ? "true" : "false") + ",";
   j += "\"discord_url\":\"" + jsonEscape(g_cfg.discordUrl) + "\",";
   j += "\"discord_username\":\"" + jsonEscape(g_cfg.discordUsername) + "\",";
-  j += "\"discord_events\":\"" + jsonEscape(g_cfg.discordEvents) + "\"";
+  j += "\"discord_events\":\"" + jsonEscape(g_cfg.discordEvents) + "\",";
+  j += "\"cpu_mhz\":" + String(validateCpuMhz(g_cfg.cpuMhz) ? g_cfg.cpuMhz : DEFAULT_CPU_MHZ) + ",";
+  j += "\"loop_delay_ms\":" +
+       String(validateLoopDelayMs(g_cfg.loopDelayMs) ? g_cfg.loopDelayMs : DEFAULT_LOOP_DELAY_MS);
   j += "}";
   return j;
 }
@@ -295,12 +346,7 @@ static void handleApiPress()
   target.toLowerCase();
   dur.toLowerCase();
 
-  gpio_num_t pin;
-  if (target == "power")
-    pin = PIN_OPTO_POWER;
-  else if (target == "reset")
-    pin = PIN_OPTO_RESET;
-  else
+  if (target != "power" && target != "reset")
   {
     sendJson(server, 400, "{\"ok\":false,\"error\":\"Invalid target\"}");
     return;
@@ -316,10 +362,8 @@ static void handleApiPress()
     return;
   }
 
-  uint32_t ms = (dur == "long") ? PULSE_LONG_MS : PULSE_SHORT_MS;
-  optoRequest(pin, ms);
-  ledPulseStart(2);
-  queueDiscord(String("Web press ") + target + " " + dur);
+  runOptoPress(target, dur);
+  queueDiscordPress(target, String("Web press ") + target + " " + dur);
   sendJson(server, 200, "{\"ok\":true}");
 }
 
@@ -333,6 +377,11 @@ static void handleApiPassword()
   if (p1.length() < 8)
   {
     sendJson(server, 400, "{\"ok\":false,\"error\":\"Min 8 characters\"}");
+    return;
+  }
+  if (p1.length() > WEB_PASS_MAX_LEN)
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Max 64 characters\"}");
     return;
   }
   if (p1 != p2)
@@ -428,22 +477,6 @@ static void handleApiDiscord()
   sendJson(server, 200, "{\"ok\":true}");
 }
 
-static bool sendDiscordWebhook(const String &content)
-{
-  if (!validateDiscordUrl(g_cfg.discordUrl))
-    return false;
-  HTTPClient http;
-  http.setTimeout(4000);
-  if (!http.begin(g_cfg.discordUrl))
-    return false;
-  http.addHeader("Content-Type", "application/json");
-  String user = g_cfg.discordUsername.isEmpty() ? "PC Control" : g_cfg.discordUsername;
-  String body = String("{\"username\":\"") + jsonEscape(user) + "\",\"content\":\"" + jsonEscape(content) + "\"}";
-  int code = http.POST(body);
-  http.end();
-  return code >= 200 && code < 300;
-}
-
 static void handleApiDiscordTest()
 {
   if (!requireAuthApi())
@@ -453,11 +486,54 @@ static void handleApiDiscordTest()
     sendJson(server, 400, "{\"ok\":false,\"error\":\"Discord disabled\"}");
     return;
   }
-  if (!sendDiscordWebhook("PC Control webhook test"))
+  if (!validateDiscordUrl(g_cfg.discordUrl))
   {
-    sendJson(server, 502, "{\"ok\":false,\"error\":\"Webhook POST failed\"}");
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Invalid webhook URL\"}");
     return;
   }
+  if (!discordEnqueue("PC Control webhook test"))
+  {
+    sendJson(server, 503, "{\"ok\":false,\"error\":\"Discord queue full\"}");
+    return;
+  }
+  sendJson(server, 200, "{\"ok\":true,\"queued\":true}");
+}
+
+static void handleApiPerformance()
+{
+  if (!requireAuthApi())
+    return;
+  if (!server.hasArg("cpu_mhz") || !server.hasArg("loop_delay_ms"))
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Missing fields\"}");
+    return;
+  }
+  long cpuArg = server.arg("cpu_mhz").toInt();
+  long delayArg = server.arg("loop_delay_ms").toInt();
+  if (cpuArg < 0 || delayArg < 0)
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Invalid number\"}");
+    return;
+  }
+  uint32_t cpuMhz = (uint32_t)cpuArg;
+  uint32_t loopMs = (uint32_t)delayArg;
+  if (!validateCpuMhz(cpuMhz) || !validateLoopDelayMs(loopMs))
+  {
+    sendJson(server, 400, "{\"ok\":false,\"error\":\"Invalid performance values\"}");
+    return;
+  }
+  DeviceConfig tmp = g_cfg;
+  tmp.cpuMhz = cpuMhz;
+  tmp.loopDelayMs = loopMs;
+  if (!nvsSavePerformance(tmp))
+  {
+    sendJson(server, 500, "{\"ok\":false,\"error\":\"NVS save failed\"}");
+    return;
+  }
+  g_cfg = tmp;
+  g_loopDelayMs = loopMs;
+  applyCpuMhz(cpuMhz);
+  Serial.printf("[SYS] performance cpu=%u MHz loop_delay=%u ms\n", cpuMhz, loopMs);
   sendJson(server, 200, "{\"ok\":true}");
 }
 
@@ -556,6 +632,7 @@ static void setupWebRoutes()
   server.on("/api/pusher", HTTP_POST, handleApiPusher);
   server.on("/api/discord", HTTP_POST, handleApiDiscord);
   server.on("/api/discord/test", HTTP_POST, handleApiDiscordTest);
+  server.on("/api/performance", HTTP_POST, handleApiPerformance);
   server.on("/api/restart", HTTP_POST, handleApiRestart);
   server.on("/api/nvs/clear", HTTP_POST, handleApiNvsClear);
   server.onNotFound(handleStatic);
@@ -591,15 +668,6 @@ static void pollFactoryButton()
   }
 }
 
-static void pollDiscord()
-{
-  if (g_discordPending.isEmpty())
-    return;
-  String msg = g_discordPending;
-  g_discordPending = "";
-  sendDiscordWebhook(msg);
-}
-
 void setup()
 {
   pinMode(PIN_LED_STATUS, OUTPUT);
@@ -609,18 +677,20 @@ void setup()
 
   Serial.begin(SERIAL_BAUD);
   delay(200);
-  Serial.println("[BOOT] pc_control ETH");
 
   g_fsOk = LittleFS.begin(false);
   if (!g_fsOk)
     Serial.println("[FS] LittleFS mount failed (upload data/ image)");
 
   loadConfig();
+  discordWorkerInit();
   if (g_cfg.themeMode.isEmpty())
     g_cfg.themeMode = "system";
+  Serial.printf("[BOOT] pc_control ETH (CPU %u MHz, loop %u ms)\n", g_cfg.cpuMhz, g_loopDelayMs);
 
   Network.onEvent(onEthEvent);
-  applyStaticEthConfig();
+  if (!applyStaticEthConfig() && g_cfg.ipMode == "static")
+    Serial.println("[ETH] warn: static config invalid, DHCP at boot");
   ETH.begin();
   setupWebRoutes();
   server.begin();
@@ -636,7 +706,6 @@ void loop()
   optoPoll();
   ledPulsePoll();
   pollFactoryButton();
-  pollDiscord();
   if (g_pusherStarted)
     pusher.loop();
 
@@ -647,4 +716,7 @@ void loop()
     if (g_ethHasIp)
       Serial.printf("[alive] http://%s/\n", ETH.localIP().toString().c_str());
   }
+
+  if (g_loopDelayMs > 0)
+    delay(g_loopDelayMs);
 }

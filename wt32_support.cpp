@@ -1,4 +1,4 @@
-#include "ft232h_support.h"
+#include "wt32_support.h"
 #include <ETH.h>
 
 static Preferences g_prefs;
@@ -37,6 +37,50 @@ static bool writeStr(const char *key, const String &val)
 bool validateFieldLen(const String &s, size_t maxLen)
 {
   return s.length() <= maxLen;
+}
+
+bool validateCpuMhz(uint32_t mhz)
+{
+  return mhz == 80 || mhz == 160 || mhz == 240;
+}
+
+bool validateLoopDelayMs(uint32_t ms)
+{
+  return ms <= LOOP_DELAY_MS_MAX;
+}
+
+void applyCpuMhz(uint32_t mhz)
+{
+  if (!validateCpuMhz(mhz))
+    mhz = DEFAULT_CPU_MHZ;
+  setCpuFrequencyMhz(mhz);
+}
+
+bool discordAllowsTarget(const String &eventsCsv, const String &target)
+{
+  if (eventsCsv.isEmpty())
+    return true;
+  String want = target;
+  want.trim();
+  want.toLowerCase();
+  if (want.isEmpty())
+    return false;
+
+  String list = eventsCsv;
+  list.toLowerCase();
+  int start = 0;
+  while (start <= (int)list.length())
+  {
+    int comma = list.indexOf(',', start);
+    String token = comma >= 0 ? list.substring(start, comma) : list.substring(start);
+    token.trim();
+    if (token == want)
+      return true;
+    if (comma < 0)
+      break;
+    start = comma + 1;
+  }
+  return false;
 }
 
 bool validateTheme(const String &s)
@@ -148,6 +192,12 @@ bool nvsLoadConfig(DeviceConfig &cfg)
   cfg.discordUrl = readStr("discord_url");
   cfg.discordUsername = readStr("discord_user");
   cfg.discordEvents = readStr("discord_ev");
+  cfg.cpuMhz = g_prefs.getUInt("cpu_mhz", DEFAULT_CPU_MHZ);
+  cfg.loopDelayMs = g_prefs.getUInt("loop_delay", DEFAULT_LOOP_DELAY_MS);
+  if (!validateCpuMhz(cfg.cpuMhz))
+    cfg.cpuMhz = DEFAULT_CPU_MHZ;
+  if (!validateLoopDelayMs(cfg.loopDelayMs))
+    cfg.loopDelayMs = DEFAULT_LOOP_DELAY_MS;
 
   g_prefs.end();
   return true;
@@ -252,6 +302,18 @@ bool nvsSaveDiscord(const DeviceConfig &cfg)
             writeStr("discord_ev", cfg.discordEvents);
   g_prefs.end();
   return ok;
+}
+
+bool nvsSavePerformance(const DeviceConfig &cfg)
+{
+  if (!validateCpuMhz(cfg.cpuMhz) || !validateLoopDelayMs(cfg.loopDelayMs))
+    return false;
+  if (!g_prefs.begin(NVS_NAMESPACE, false))
+    return false;
+  g_prefs.putUInt("cpu_mhz", cfg.cpuMhz);
+  g_prefs.putUInt("loop_delay", cfg.loopDelayMs);
+  g_prefs.end();
+  return true;
 }
 
 bool nvsClearAll()

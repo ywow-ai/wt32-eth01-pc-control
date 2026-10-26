@@ -13,12 +13,12 @@ Tinjauan kode (review statis + compile `esp32:esp32:wt32-eth01`). Bukan penggant
 | Struktur & dokumentasi     | Baik — README/TODO selaras dengan implementasi |
 | Loop / opto (jalur normal) | Baik — state machine non-blocking              |
 | Web API & validasi         | Cukup baik — server-side checks ada            |
-| Pusher remote              | **Berisiko tidak jalan** — parsing payload     |
+| Pusher remote              | **Diperbaiki** — `wt32_pusher_cmd` + path key  |
 | NVS save field kosong      | **Diperbaiki** — empty → `remove` key          |
-| Discord webhook            | **Berisiko timing opto** — HTTP blocking       |
+| Discord webhook            | **Dimitigasi** — kirim saat opto idle          |
 | Compile                    | OK (~10% flash)                                |
 
-Kesimpulan: cocok sebagai kontrol PC via web di LAN setelah password diganti dan LittleFS di-upload; perbaiki item **Prioritas tinggi** sebelum mengandalkan Pusher/Discord dan save network dengan DNS kosong.
+Kesimpulan: siap QA hardware setelah password diganti, upload sketch + LittleFS; Discord test masih blocking singkat saat opto idle.
 
 ---
 
@@ -141,12 +141,13 @@ HTTP cleartext, password default `12345678`, webhook/key di NVS — sudah di REA
 
 ## Checklist perbaikan (usulan)
 
-- [ ] Port `extractPusherCommand` + wiring `onPusherMessage` dari `pc_control_v2`
+- [x] Port `extractPusherCommand` (`wt32_pusher_cmd.cpp`)
 - [x] Perbaiki `writeStr` untuk nilai kosong
-- [ ] Discord non-blocking / jangan block saat opto aktif
-- [ ] Cek/log hasil `applyStaticEthConfig()` di boot
-- [ ] (Opsional) Pakai `pusher_key`/`cluster` atau jelaskan di UI
-- [ ] (Opsional) Filter `discord_events` atau hapus dari form
+- [x] Discord: `pollDiscord` skip saat opto busy; test 409 jika busy
+- [x] Log `applyStaticEthConfig()` gagal di boot
+- [x] Default path `/app/<key>` + hint UI
+- [x] Filter `discord_events` by target (power/reset)
+- [x] CSS `.msg` / `.hidden`; caption network reboot
 - [ ] QA manual: `TODO.md` setelah patch
 
 ---
@@ -156,6 +157,7 @@ HTTP cleartext, password default `12345678`, webhook/key di NVS — sudah di REA
 | File                              | Peran review                               |
 | --------------------------------- | ------------------------------------------ |
 | `wt32-eth01-pc-control.ino`       | Web, Pusher handler, Discord, ETH, session |
-| `ft232h_support.cpp`              | NVS, validasi, opto, LED pulse             |
+| `wt32_support.cpp`                | NVS, validasi, opto, LED pulse             |
+| `wt32_pusher_cmd.cpp`             | Parse payload Pusher / plain `press,...`   |
 | `PusherClient.cpp`                | Protokol WS Pusher (bukan parsing cmd)     |
 | `pc_control_v2/pc_control_v2.ino` | Referensi Pusher + NVS empty string        |

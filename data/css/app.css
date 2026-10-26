@@ -571,3 +571,27 @@ select[disabled] {
 html[data-theme="dark"] .design-banner code {
   background: rgba(255, 255, 255, 0.08);
 }
+
+.hidden {
+  display: none !important;
+}
+
+.msg {
+  margin: 12px 0;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+}
+
+.msg-ok {
+  background: rgba(30, 90, 138, 0.12);
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+.msg-err {
+  background: rgba(180, 35, 24, 0.1);
+  color: var(--danger);
+  border-color: var(--danger);
+}
