@@ -3,7 +3,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 PORT="${1:-/dev/ttyUSB0}"
-FQBN="esp32:esp32:wt32-eth01"
 MKL=$(ls -d "$HOME/.arduino15/packages/esp32/tools/mklittlefs/"*/mklittlefs 2>/dev/null | sort -V | tail -1)
 ESPTOOL=$(ls -d "$HOME/.arduino15/packages/esp32/tools/esptool_py/"*/esptool 2>/dev/null | sort -V | tail -1)
 
@@ -13,7 +12,8 @@ if [[ ! -x "$MKL" || ! -x "$ESPTOOL" ]]; then
 fi
 
 BIN="/tmp/wt32-eth01-littlefs.bin"
-"$MKL" -c "$ROOT/data" -s 0x190000 "$BIN"
-# Offset littlefs default partition (0x290000) — sesuaikan jika ganti partition table
-"$ESPTOOL" --chip esp32 --port "$PORT" --before default-reset --after hard-reset write-flash 0x290000 "$BIN"
+LFS_SIZE=0x160000
+LFS_OFFSET=0x290000
+"$MKL" -c "$ROOT/data" -s "$LFS_SIZE" "$BIN"
+"$ESPTOOL" --chip esp32 --port "$PORT" --before default-reset --after hard-reset write-flash -fs 4MB "$LFS_OFFSET" "$BIN"
 echo "LittleFS upload selesai."

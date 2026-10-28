@@ -121,6 +121,7 @@ void netBegin(const DeviceConfig &cfg)
     {
       WiFi.persistent(false);
       WiFi.mode(WIFI_STA);
+      WiFi.setSleep(WIFI_PS_NONE);
       if (!applyStaticWifi(cfg) && cfg.ipMode == "static")
         Serial.println("[WIFI] warn: static config invalid, DHCP at boot");
       WiFi.begin(cfg.wifiSsid.c_str(), cfg.wifiPass.c_str());

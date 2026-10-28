@@ -36,6 +36,15 @@
     return body;
   }
 
+  /** ESP32 WebServer reads application/x-www-form-urlencoded, not multipart FormData. */
+  function formPost(fd) {
+    return {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(fd).toString(),
+    };
+  }
+
   function formatUptime(sec) {
     var h = Math.floor(sec / 3600);
     var m = Math.floor((sec % 3600) / 60);
@@ -113,8 +122,8 @@
     $("discord_username").value = c.discord_username || "";
     $("discord_events").value = c.discord_events || "";
 
-    var defCpu = 80;
-    var defDelay = 10;
+    var defCpu = 160;
+    var defDelay = 5;
     if ($("cpu_mhz")) {
       var cpu = parseInt(c.cpu_mhz, 10);
       $("cpu_mhz").value =
@@ -140,8 +149,12 @@
       hideMsg($("login-msg"));
       var fd = new FormData(form);
       try {
-        await api("/api/login", { method: "POST", body: fd });
-        location.href = "/index.html";
+        await api("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams(fd).toString(),
+        });
+        location.href = "/";
       } catch (err) {
         showMsg(
           $("login-msg"),
@@ -178,7 +191,7 @@
           return;
         }
         try {
-          await api("/api/password", { method: "POST", body: fd });
+          await api("/api/password", formPost(fd));
           showMsg($("pw-msg"), "Saved", true);
           e.target.reset();
         } catch (err) {
@@ -215,7 +228,7 @@
           }
         }
         try {
-          await api("/api/network", { method: "POST", body: fd });
+          await api("/api/network", formPost(fd));
           showMsg($("net-msg"), "Saved, rebooting...", true);
         } catch (err) {
           showMsg(
@@ -252,7 +265,7 @@
           return;
         }
         try {
-          await api("/api/pusher", { method: "POST", body: fd });
+          await api("/api/pusher", formPost(fd));
           showMsg($("push-msg"), "Saved", true);
         } catch (err) {
           showMsg(
@@ -277,7 +290,7 @@
           }
         }
         try {
-          await api("/api/discord", { method: "POST", body: fd });
+          await api("/api/discord", formPost(fd));
           showMsg($("disc-msg"), "Saved", true);
         } catch (err) {
           showMsg(
@@ -310,7 +323,7 @@
         fd.append("target", btn.getAttribute("data-press"));
         fd.append("dur", btn.getAttribute("data-dur"));
         try {
-          await api("/api/press", { method: "POST", body: fd });
+          await api("/api/press", formPost(fd));
           showMsg($("ctrl-msg"), "OK", true);
         } catch (err) {
           showMsg(
@@ -340,7 +353,7 @@
         fd.append("cpu_mhz", String(cpu));
         fd.append("loop_delay_ms", String(delayMs));
         try {
-          await api("/api/performance", { method: "POST", body: fd });
+          await api("/api/performance", formPost(fd));
           showMsg($("perf-msg"), "Saved", true);
         } catch (err) {
           showMsg(
@@ -372,7 +385,7 @@
         var fd = new FormData();
         fd.append("confirm", "yes");
         try {
-          await api("/api/nvs/clear", { method: "POST", body: fd });
+          await api("/api/nvs/clear", formPost(fd));
           showMsg($("nvs-msg"), "Rebooting...", true);
         } catch (err) {
           showMsg(

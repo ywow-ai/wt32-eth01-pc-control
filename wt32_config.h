@@ -24,6 +24,6 @@ static const size_t NVS_STR_URL = 200;
 
 static const char *EMPTY_LABEL = "()";
 
-static const uint32_t DEFAULT_CPU_MHZ = 80;
-static const uint32_t DEFAULT_LOOP_DELAY_MS = 10;
+static const uint32_t DEFAULT_CPU_MHZ = 160;
+static const uint32_t DEFAULT_LOOP_DELAY_MS = 5;
 static const uint32_t LOOP_DELAY_MS_MAX = 100;

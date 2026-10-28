@@ -1,6 +1,6 @@
 # WT32-ETH01 PC control (web + opto)
 
-Kontrol power/restart PC via opto; konfigurasi lewat **web**, **serial**, atau **NVS**. Jaringan: **Ethernet (LAN)**, **Wi‑Fi (WLAN)**, atau **keduanya (auto)**.
+Kontrol power/restart PC via opto; konfigurasi lewat **web**, **serial**, atau **NVS**. Jaringan: **Wi‑Fi (WLAN)** untuk operasi harian; **Ethernet (LAN)** opsional jika PHY modul OK.
 
 Programming: **FT232H** (UART) atau adapter USB‑serial 3,3 V. Operasi: **HTTP** di `http://<ip>/`.
 
@@ -13,9 +13,32 @@ Programming: **FT232H** (UART) atau adapter USB‑serial 3,3 V. Operasi: **HTTP*
 | FQBN             | `esp32:esp32:wt32-eth01`                         |
 | Serial           | **115200** — log, perintah NVS (`help`)          |
 | Web              | `http://<ip>/` — **LittleFS** wajib di-upload    |
-| Password default | `12345678`                                       |
+| Password default | `12345678` — **ganti** setelah login pertama     |
 | Sesi             | Cookie **session** (tutup browser = login lagi)  |
-| Jaringan default | `net_link=auto` (Ethernet + Wi‑Fi jika SSID ada) |
+| NVS `net_link`   | **`wifi`** disarankan jika LAN/PHY tidak dipakai |
+| Performance NVS  | **160 MHz**, **5 ms** loop delay (default baru)  |
+
+---
+
+## Production deploy (satu alur)
+
+1. Salin `.env.example` → `.env` — isi **`WLAN_SSID`**, **`WLAN_PASS`**, **`NET_LINK=wifi`**, Pusher, Discord (opsional).
+2. Wiring upload: FT232H + (opsional) C3 [`esp32c3-gpio`](../esp32c3-gpio) untuk flash otomatis.
+3. Jalankan:
+
+```bash
+cd ~/Documents/ywow/arduino/wt32-eth01-pc-control
+chmod +x deploy.sh flash_wt32.sh upload_littlefs.sh apply_env.sh
+./deploy.sh
+```
+
+`deploy.sh` = **compile** → **flash sketch** → **LittleFS** → **`apply_env.sh`** (NVS + reboot + cetak URL dari `[alive]`).
+
+Tanpa C3: set `WT32_PORT=/dev/ttyUSB0`; sketch upload pakai `arduino-cli upload` (boot GPIO0/EN manual).
+
+Setelah online: login web → tes **Power** / **Restart** → `./push_pusher.sh` / `./push_pusher.sh reset short` jika Pusher dipakai.
+
+Checklist: `TODO.md` · riwayat review: `REVISION.md`.
 
 ---
 
@@ -30,12 +53,32 @@ Programming: **FT232H** (UART) atau adapter USB‑serial 3,3 V. Operasi: **HTTP*
 | GND            | **GND**                                            |
 | 5 V (opsional) | **5 V** — atau daya terpisah; **GND harus common** |
 
-**Upload:** **GPIO0 → GND** → tekan **EN** → upload → **lepas GPIO0** → **EN** lagi.
+**Upload manual:** GPIO0 → GND → **EN** → upload → lepas GPIO0 → **EN**.
+
+**Upload otomatis (C3 [`esp32c3-gpio`](../esp32c3-gpio) + FT232H):** tidak perlu lepas/colok GPIO0/EN WT32.
+
+| ESP32-C3 | WT32                                       |
+| :------- | :----------------------------------------- |
+| **io1**  | **GPIO0** (flash — `high io1` saat upload) |
+| **io3**  | **EN** (pulse `high io3 150`)              |
+| GND      | GND (+ FT232H GND)                         |
+
+Data flash: **FT232H** → RX0/TX0 (`/dev/ttyUSB0`). C3: `/dev/ttyACM0` (firmware C3 generic `high`/`low` saja).
 
 ```bash
 arduino-cli compile --fqbn esp32:esp32:wt32-eth01 \
   ~/Documents/ywow/arduino/wt32-eth01-pc-control
 
+chmod +x flash_wt32.sh
+./flash_wt32.sh upload
+./flash_wt32.sh upload-fs
+```
+
+Port: `./flash_wt32.sh upload /dev/ttyUSB0 /dev/ttyACM0` — atau env `WT32_PORT`, `C3_PORT`.
+
+Tanpa C3:
+
+```bash
 arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:wt32-eth01 \
   ~/Documents/ywow/arduino/wt32-eth01-pc-control
 ```
@@ -252,24 +295,69 @@ Static: `/login.html`, `/index.html`, `/css/*`, `/js/*`.
 
 ---
 
-## Pusher (remote internet)
+## Pusher (perintah remote)
 
-Isi **Pusher / WebSocket** di web. Perintah channel: **`press,power,short`** / **`press,reset,...`**.
+**Ini** jalur **perintah** ke WT32 (WebSocket). Discord **tidak** dipakai untuk perintah.
 
-Tes dari PC: `.env.example` → `.env`, lalu `./push_pusher.sh`. Kredensial ESP tetap di **NVS** (web/serial).
+Isi **Pusher / WebSocket** di web atau lewat `./apply_env.sh` (dari `.env`: `APP_ID`, `KEY`, `SECRET`, `CLUSTER`, `PUSHER_WS_HOST`, `PUSHER_CHANNEL`).
+
+Payload channel (client event / data): **`press,power,short`** atau **`press,reset,long`** — sama seperti `push_pusher.sh` (`cmd` di JSON).
+
+1. Salin `.env.example` → `.env`, isi Wi‑Fi + Pusher (+ Discord ID/token untuk notifikasi).
+2. **`./apply_env.sh`** — NVS + reboot → URL web dari `[alive]`.
+3. **`./push_pusher.sh`** — default `press,power,short`. Restart: **`./push_pusher.sh reset short`**. Serial: `[Pusher] rx: press,...`.
+
+**URL web:** `http://<ip>/` — `<ip>` dari DHCP router (Wi‑Fi/Ethernet), **bukan** dari `.env`. Contoh setelah online: `[alive] http://192.168.1.42/`. Port **80**, login default **`12345678`**.
 
 ---
 
-## Discord
+## Discord (notifikasi saja)
 
-Webhook lewat **antrean + task** (non-blocking di `loop()`).
+**Bukan** saluran perintah — perintah remote hanya lewat **Pusher**. Discord dipakai untuk **laporan** setelah power/reset (web atau Pusher), misalnya: `PC control: press,power,short`.
+
+Pola webhook sama seperti proyek referensi `who-didnt` di `/home/kai/Documents/ywow/bun/playground/who-didnt` (Bun):
+
+```text
+https://discord.com/api/webhooks/<DISCORD_WEBHOOK_ID>/<DISCORD_TOKEN>
+```
+
+### 1. Buat webhook di Discord
+
+Server → **Integrations** → **Webhooks** → New → salin **Webhook URL** (atau ID + token terpisah).
+
+### 2. Isi di PC (`.env`, tidak di-commit)
+
+```env
+DISCORD_WEBHOOK_ID=...
+DISCORD_TOKEN=...
+DISCORD_USER=WT32 PC          # opsional, username tampilan
+DISCORD_EVENTS=power,reset    # filter: power / reset
+```
+
+Lalu **`./apply_env.sh`** — membentuk URL penuh, set **`discord_en=1`**, user & events ke NVS.
+
+Atau tempel **URL penuh** di web: **Settings → Discord** → enable → **Save** (tanpa `.env`).
+
+### 3. Tes
+
+- **Web:** Settings → Discord → **Test** (butuh login).
+- **End-to-end:** `./push_pusher.sh` → opto + (jika enabled) satu notifikasi Discord per event sukses.
+
+Firmware: POST JSON `{"username":"...","content":"..."}` lewat **antrean + task** (tidak blocking `loop()`). Event kosong di **discord_ev** = semua target; `power,reset` = hanya itu.
+
+| Sumber                    | Contoh teks Discord             |
+| :------------------------ | :------------------------------ |
+| **Pusher**                | `PC control: press,power,short` |
+| **Web** (Power / Restart) | `Web press reset short`         |
+
+Settings → Discord → **Events**: kosong = semua; kalau cuma `power`, **Restart tidak kirim** (serial: `[Discord] skip (filter)`). Tombol web butuh **LittleFS** terbaru (`formPost` urlencoded).
 
 ---
 
 ## NVS
 
 - String kosong → key **dihapus** (`remove`).
-- Performance default: **80 MHz**, **10 ms** loop delay.
+- Performance default: **160 MHz**, **5 ms** loop delay (turunkan lewat **System → Performance** jika perlu hemat panas).
 - `wifi_pass` / `web_pass` di serial `show` default **masked**.
 
 ---
@@ -295,6 +383,8 @@ Webhook lewat **antrean + task** (non-blocking di `loop()`).
 | `wt32_config.h`                        | Pin & konstanta                  |
 | `data/`                                | UI LittleFS                      |
 | `upload_littlefs.sh`                   | Upload FS                        |
+| `deploy.sh`                            | Compile + flash + FS + `.env`    |
+| `apply_env.sh` / `push_pusher.sh`      | NVS dari PC / tes Pusher         |
 | `eth0-dhcp.sh`                         | DHCP laptop ↔ modul (tes direct) |
 | `eth_test/`                            | Sketch tes PHY Ethernet saja     |
 

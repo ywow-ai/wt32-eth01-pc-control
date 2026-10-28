@@ -85,12 +85,21 @@ static void redirectLogin()
   server.send(302, "text/plain", "");
 }
 
+static bool isPublicWebUri(const String &uri)
+{
+  return uri == "/login.html" || uri.startsWith("/css/") || uri.startsWith("/js/");
+}
+
 static void queueDiscordPress(const String &target, const String &msg)
 {
   if (!g_cfg.discordEnabled || g_cfg.discordUrl.isEmpty())
     return;
   if (!discordAllowsTarget(g_cfg.discordEvents, target))
+  {
+    Serial.printf("[Discord] skip (filter) target=%s ev=%s\n", target.c_str(),
+                  g_cfg.discordEvents.c_str());
     return;
+  }
   if (!discordEnqueue(msg))
     Serial.println("[Discord] queue full");
 }
@@ -583,6 +592,8 @@ static void handleStatic()
 
   if (uri.startsWith("/api/"))
     sendJson(server, 404, "{\"ok\":false,\"error\":\"Not found\"}");
+  else if (isPublicWebUri(uri))
+    server.send(404, "text/plain", "Not found (upload LittleFS?)");
   else if (!sessionValid())
     redirectLogin();
   else
@@ -665,6 +676,10 @@ void setup()
 
   netBegin(g_cfg);
   setupWebRoutes();
+  {
+    static const char *headerKeys[] = {"Cookie"};
+    server.collectHeaders(headerKeys, 1);
+  }
   server.begin();
 
   pusherReconnect();
