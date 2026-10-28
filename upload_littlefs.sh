@@ -15,5 +15,5 @@ fi
 BIN="/tmp/wt32-eth01-littlefs.bin"
 "$MKL" -c "$ROOT/data" -s 0x190000 "$BIN"
 # Offset littlefs default partition (0x290000) — sesuaikan jika ganti partition table
-"$ESPTOOL" --chip esp32 --port "$PORT" write_flash 0x290000 "$BIN"
+"$ESPTOOL" --chip esp32 --port "$PORT" --before default-reset --after hard-reset write-flash 0x290000 "$BIN"
 echo "LittleFS upload selesai."

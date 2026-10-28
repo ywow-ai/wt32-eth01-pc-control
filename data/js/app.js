@@ -64,7 +64,10 @@
     var d = await api("/api/status");
     $("topbar-ip").textContent = disp(d.ip);
     $("st-link").textContent = d.link ? d.link_text || "Up" : EMPTY;
+    $("st-active") && ($("st-active").textContent = disp(d.active_if));
     $("st-ip").textContent = disp(d.ip);
+    $("st-eth-ip") && ($("st-eth-ip").textContent = disp(d.eth_ip));
+    $("st-wifi-ip") && ($("st-wifi-ip").textContent = disp(d.wifi_ip));
     $("st-gw").textContent = disp(d.gateway);
     $("st-mask").textContent = disp(d.subnet);
     $("st-dns").textContent = disp(d.dns);
@@ -82,10 +85,16 @@
     if (window.pcThemeSyncRadios)
       window.pcThemeSyncRadios(c.theme_mode || "system");
 
+    var netLink = c.net_link || "auto";
+    document.querySelectorAll('input[name="net_link"]').forEach(function (el) {
+      el.checked = el.value === netLink;
+    });
     var ipMode = c.ip_mode || "dhcp";
     document.querySelectorAll('input[name="ip_mode"]').forEach(function (el) {
       el.checked = el.value === ipMode;
     });
+    $("wifi_ssid") && ($("wifi_ssid").value = c.wifi_ssid || "");
+    $("wifi_pass") && ($("wifi_pass").value = "");
     $("ip_addr").value = c.ip_addr || "";
     $("subnet").value = c.subnet || "";
     $("gateway").value = c.gateway || "";
@@ -186,6 +195,11 @@
         e.preventDefault();
         hideMsg($("net-msg"));
         var fd = new FormData(e.target);
+        var link = fd.get("net_link") || "auto";
+        if (link === "wifi" && !String(fd.get("wifi_ssid") || "").trim()) {
+          showMsg($("net-msg"), "Wi-Fi SSID required for Wi-Fi only", false);
+          return;
+        }
         if (fd.get("ip_mode") === "static") {
           if (
             !ipv4Ok(fd.get("ip_addr")) ||

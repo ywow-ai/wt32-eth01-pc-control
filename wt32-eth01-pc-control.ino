@@ -1,22 +1,25 @@
 #include <ETH.h>
+#include <WiFi.h>
 #include <LittleFS.h>
 #include <Preferences.h>
 #include <WebServer.h>
 #include "PusherClient.h"
 #include "wt32_config.h"
 #include "wt32_discord.h"
+#include "wt32_net.h"
 #include "wt32_pusher_cmd.h"
+#include "wt32_serial_cmd.h"
 #include "wt32_support.h"
 
 WebServer server(80);
 PusherClient pusher;
 
 DeviceConfig g_cfg;
-static bool g_ethHasIp = false;
 static bool g_fsOk = false;
 static String g_sessionId;
 static uint32_t g_factoryHoldStart = 0;
 static bool g_factoryTriggered = false;
+static bool g_factorySeenRelease = false;
 static bool g_pusherStarted = false;
 static uint32_t g_loopDelayMs = DEFAULT_LOOP_DELAY_MS;
 
@@ -152,7 +155,7 @@ static void pusherOnMessage(const char *data, size_t length)
   Serial.printf("[Pusher] rx: %s\n", line.c_str());
 }
 
-static void pusherReconnect()
+void pusherReconnect()
 {
   g_pusherStarted = false;
   pusher.disconnect();
@@ -176,23 +179,6 @@ static void pusherReconnect()
   Serial.println("[Pusher] (re)connect requested");
 }
 
-static bool applyStaticEthConfig()
-{
-  if (g_cfg.ipMode != "static")
-    return true;
-  if (!validateIpv4(g_cfg.ipAddr) || !validateIpv4(g_cfg.subnet) || !validateIpv4(g_cfg.gateway))
-    return false;
-
-  IPAddress ip, gw, sn, d1(8, 8, 8, 8), d2;
-  if (!ip.fromString(g_cfg.ipAddr) || !gw.fromString(g_cfg.gateway) || !sn.fromString(g_cfg.subnet))
-    return false;
-  if (!g_cfg.dns1.isEmpty())
-    d1.fromString(g_cfg.dns1);
-  if (!g_cfg.dns2.isEmpty())
-    d2.fromString(g_cfg.dns2);
-  return ETH.config(ip, gw, sn, d1, d2);
-}
-
 static void applyPerformanceDefaults()
 {
   if (!validateCpuMhz(g_cfg.cpuMhz))
@@ -201,6 +187,11 @@ static void applyPerformanceDefaults()
     g_cfg.loopDelayMs = DEFAULT_LOOP_DELAY_MS;
   g_loopDelayMs = g_cfg.loopDelayMs;
   applyCpuMhz(g_cfg.cpuMhz);
+}
+
+void syncRuntimeFromConfig()
+{
+  applyPerformanceDefaults();
 }
 
 static void loadConfig()
@@ -218,7 +209,10 @@ static String buildConfigJson()
   String j = "{";
   j += "\"ok\":true,";
   j += "\"theme_mode\":\"" + jsonEscape(g_cfg.themeMode.isEmpty() ? "system" : g_cfg.themeMode) + "\",";
+  j += "\"net_link\":\"" + jsonEscape(g_cfg.netLink.isEmpty() ? "auto" : g_cfg.netLink) + "\",";
   j += "\"ip_mode\":\"" + jsonEscape(g_cfg.ipMode.isEmpty() ? "dhcp" : g_cfg.ipMode) + "\",";
+  j += "\"wifi_ssid\":\"" + jsonEscape(g_cfg.wifiSsid) + "\",";
+  j += "\"wifi_pass\":\"" + jsonEscape(g_cfg.wifiPass.isEmpty() ? "" : "***") + "\",";
   j += "\"ip_addr\":\"" + jsonEscape(g_cfg.ipAddr) + "\",";
   j += "\"subnet\":\"" + jsonEscape(g_cfg.subnet) + "\",";
   j += "\"gateway\":\"" + jsonEscape(g_cfg.gateway) + "\",";
@@ -235,8 +229,7 @@ static String buildConfigJson()
   j += "\"discord_username\":\"" + jsonEscape(g_cfg.discordUsername) + "\",";
   j += "\"discord_events\":\"" + jsonEscape(g_cfg.discordEvents) + "\",";
   j += "\"cpu_mhz\":" + String(validateCpuMhz(g_cfg.cpuMhz) ? g_cfg.cpuMhz : DEFAULT_CPU_MHZ) + ",";
-  j += "\"loop_delay_ms\":" +
-       String(validateLoopDelayMs(g_cfg.loopDelayMs) ? g_cfg.loopDelayMs : DEFAULT_LOOP_DELAY_MS);
+  j += "\"loop_delay_ms\":" + String(validateLoopDelayMs(g_cfg.loopDelayMs) ? g_cfg.loopDelayMs : DEFAULT_LOOP_DELAY_MS);
   j += "}";
   return j;
 }
@@ -303,29 +296,27 @@ static void handleApiStatus()
   if (!requireAuthApi())
     return;
 
-  String ip = g_ethHasIp ? ETH.localIP().toString() : "";
-  String gw = g_ethHasIp ? ETH.gatewayIP().toString() : "";
-  String mask = g_ethHasIp ? ETH.subnetMask().toString() : "";
-  String dns = g_ethHasIp ? ETH.dnsIP().toString() : "";
-  if (dns == "0.0.0.0")
-    dns = "";
-
-  String linkText;
-  if (g_ethHasIp)
-    linkText = (g_cfg.ipMode == "static") ? "Up (static)" : "Up (DHCP)";
-  else
+  String ip, gw, mask, dns;
+  netGetPrimaryIpv4(ip, gw, mask, dns);
+  String linkText = netLinkStatusText();
+  if (linkText.isEmpty())
     linkText = EMPTY_LABEL;
+  String ethIp = netEthHasIp() ? ETH.localIP().toString() : "";
+  String wifiIp = netWifiHasIp() ? WiFi.localIP().toString() : "";
 
   String json = "{";
   json += "\"ok\":true,";
-  json += "\"link\":" + String(g_ethHasIp ? "true" : "false") + ",";
+  json += "\"link\":" + String(netHasIp() ? "true" : "false") + ",";
   json += "\"link_text\":\"" + jsonEscape(linkText) + "\",";
+  json += "\"active_if\":\"" + jsonEscape(netActiveInterface()) + "\",";
+  json += "\"eth_ip\":\"" + jsonEscape(ethIp) + "\",";
+  json += "\"wifi_ip\":\"" + jsonEscape(wifiIp) + "\",";
   json += "\"ip\":\"" + jsonEscape(ip) + "\",";
   json += "\"gateway\":\"" + jsonEscape(gw) + "\",";
   json += "\"subnet\":\"" + jsonEscape(mask) + "\",";
   json += "\"dns\":\"" + jsonEscape(dns) + "\",";
-  json += "\"mac\":\"" + jsonEscape(ETH.macAddress()) + "\",";
-  json += "\"hostname\":\"" + jsonEscape(String(ETH.getHostname() ? ETH.getHostname() : "pc-control-eth")) + "\",";
+  json += "\"mac\":\"" + jsonEscape(netPrimaryMac()) + "\",";
+  json += "\"hostname\":\"" + jsonEscape(netPrimaryHostname()) + "\",";
   json += "\"chip\":\"" + jsonEscape(String(ESP.getChipModel())) + "\",";
   json += "\"uptime_sec\":" + String(millis() / 1000) + ",";
   json += "\"free_heap\":" + String(ESP.getFreeHeap());
@@ -399,12 +390,16 @@ static void handleApiPassword()
 
 static void fillCfgNetworkFromArgs(DeviceConfig &cfg)
 {
+  cfg.netLink = server.arg("net_link");
   cfg.ipMode = server.arg("ip_mode");
   cfg.ipAddr = server.arg("ip_addr");
   cfg.subnet = server.arg("subnet");
   cfg.gateway = server.arg("gateway");
   cfg.dns1 = server.arg("dns1");
   cfg.dns2 = server.arg("dns2");
+  cfg.wifiSsid = server.arg("wifi_ssid");
+  if (server.hasArg("wifi_pass") && server.arg("wifi_pass").length() > 0)
+    cfg.wifiPass = server.arg("wifi_pass");
 }
 
 static void handleApiNetwork()
@@ -594,29 +589,6 @@ static void handleStatic()
     serveStaticFile("/index.html");
 }
 
-static void onEthEvent(arduino_event_id_t event)
-{
-  switch (event)
-  {
-  case ARDUINO_EVENT_ETH_START:
-    ETH.setHostname("pc-control-eth");
-    break;
-  case ARDUINO_EVENT_ETH_GOT_IP:
-    g_ethHasIp = true;
-    digitalWrite(PIN_LED_STATUS, HIGH);
-    Serial.print("[ETH] IP ");
-    Serial.println(ETH.localIP());
-    break;
-  case ARDUINO_EVENT_ETH_LOST_IP:
-  case ARDUINO_EVENT_ETH_DISCONNECTED:
-    g_ethHasIp = false;
-    digitalWrite(PIN_LED_STATUS, LOW);
-    break;
-  default:
-    break;
-  }
-}
-
 static void setupWebRoutes()
 {
   server.on("/api/session", HTTP_GET, handleApiSession);
@@ -644,10 +616,13 @@ static void pollFactoryButton()
   uint32_t now = millis();
   if (!down)
   {
+    g_factorySeenRelease = true;
     g_factoryHoldStart = 0;
     g_factoryTriggered = false;
     return;
   }
+  if (!g_factorySeenRelease)
+    return;
   if (g_factoryTriggered)
     return;
   if (g_factoryHoldStart == 0)
@@ -686,16 +661,14 @@ void setup()
   discordWorkerInit();
   if (g_cfg.themeMode.isEmpty())
     g_cfg.themeMode = "system";
-  Serial.printf("[BOOT] pc_control ETH (CPU %u MHz, loop %u ms)\n", g_cfg.cpuMhz, g_loopDelayMs);
+  Serial.printf("[BOOT] pc_control LAN/WLAN (CPU %u MHz, loop %u ms)\n", g_cfg.cpuMhz, g_loopDelayMs);
 
-  Network.onEvent(onEthEvent);
-  if (!applyStaticEthConfig() && g_cfg.ipMode == "static")
-    Serial.println("[ETH] warn: static config invalid, DHCP at boot");
-  ETH.begin();
+  netBegin(g_cfg);
   setupWebRoutes();
   server.begin();
 
   pusherReconnect();
+  serialCmdPrintBootHint();
 
   Serial.println("[WEB] HTTP :80 session cookie (browser close = re-login)");
 }
@@ -703,6 +676,7 @@ void setup()
 void loop()
 {
   server.handleClient();
+  serialCmdPoll();
   optoPoll();
   ledPulsePoll();
   pollFactoryButton();
@@ -713,8 +687,12 @@ void loop()
   if (millis() - lastBeat >= 5000)
   {
     lastBeat = millis();
-    if (g_ethHasIp)
-      Serial.printf("[alive] http://%s/\n", ETH.localIP().toString().c_str());
+    if (netHasIp())
+    {
+      Serial.printf("[alive] http://%s/ (%s)\n", netPrimaryIp().c_str(), netActiveInterface().c_str());
+      if (netEthHasIp() && netWifiHasIp())
+        Serial.printf("[alive] wifi http://%s/\n", WiFi.localIP().toString().c_str());
+    }
   }
 
   if (g_loopDelayMs > 0)

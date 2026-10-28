@@ -1,4 +1,5 @@
 #include "wt32_support.h"
+#include "wt32_net.h"
 #include <ETH.h>
 
 static Preferences g_prefs;
@@ -86,6 +87,11 @@ bool discordAllowsTarget(const String &eventsCsv, const String &target)
 bool validateTheme(const String &s)
 {
   return s == "system" || s == "light" || s == "dark";
+}
+
+bool validateNetLink(const String &s)
+{
+  return s == "auto" || s == "ethernet" || s == "wifi";
 }
 
 bool validateIpMode(const String &s)
@@ -176,7 +182,10 @@ bool nvsLoadConfig(DeviceConfig &cfg)
     return false;
 
   cfg.themeMode = readStr("theme_mode", "system");
+  cfg.netLink = readStr("net_link", "auto");
   cfg.ipMode = readStr("ip_mode", "dhcp");
+  cfg.wifiSsid = readStr("wifi_ssid");
+  cfg.wifiPass = readStr("wifi_pass");
   cfg.ipAddr = readStr("ip_addr");
   cfg.subnet = readStr("subnet");
   cfg.gateway = readStr("gateway");
@@ -238,7 +247,13 @@ bool nvsSaveTheme(const String &mode)
 
 bool nvsSaveNetwork(const DeviceConfig &cfg)
 {
+  if (!validateNetLink(cfg.netLink.isEmpty() ? "auto" : cfg.netLink))
+    return false;
   if (!validateIpMode(cfg.ipMode))
+    return false;
+  if (!validateFieldLen(cfg.wifiSsid, 32) || !validateFieldLen(cfg.wifiPass, 64))
+    return false;
+  if (cfg.netLink == "wifi" && cfg.wifiSsid.isEmpty())
     return false;
   if (cfg.ipMode == "static")
   {
@@ -251,12 +266,15 @@ bool nvsSaveNetwork(const DeviceConfig &cfg)
   }
   if (!g_prefs.begin(NVS_NAMESPACE, false))
     return false;
-  bool ok = writeStr("ip_mode", cfg.ipMode) &&
+  bool ok = writeStr("net_link", cfg.netLink.isEmpty() ? "auto" : cfg.netLink) &&
+            writeStr("ip_mode", cfg.ipMode) &&
             writeStr("ip_addr", cfg.ipAddr) &&
             writeStr("subnet", cfg.subnet) &&
             writeStr("gateway", cfg.gateway) &&
             writeStr("dns1", cfg.dns1) &&
-            writeStr("dns2", cfg.dns2);
+            writeStr("dns2", cfg.dns2) &&
+            writeStr("wifi_ssid", cfg.wifiSsid) &&
+            writeStr("wifi_pass", cfg.wifiPass);
   g_prefs.end();
   return ok;
 }
@@ -390,9 +408,241 @@ void ledPulsePoll()
   if (g_ledPulse.left == 0)
   {
     g_ledPulse.running = false;
-    if (ETH.linkUp())
-      digitalWrite(PIN_LED_STATUS, HIGH);
-    else
-      digitalWrite(PIN_LED_STATUS, LOW);
+    netUpdateLed();
   }
+}
+
+static void serialPrintKv(const char *key, const String &val, bool secret)
+{
+  Serial.print(key);
+  Serial.print('=');
+  if (secret && !val.isEmpty())
+    Serial.println("***");
+  else
+    Serial.println(val.isEmpty() ? "()" : val);
+}
+
+bool configPrintSerialKey(const String &key, bool includeSecrets)
+{
+  String k = key;
+  k.trim();
+  k.toLowerCase();
+  DeviceConfig c;
+  nvsLoadConfig(c);
+
+  if (k == "theme_mode")
+    serialPrintKv("theme_mode", c.themeMode, false);
+  else if (k == "net_link")
+    serialPrintKv("net_link", c.netLink.isEmpty() ? "auto" : c.netLink, false);
+  else if (k == "ip_mode")
+    serialPrintKv("ip_mode", c.ipMode, false);
+  else if (k == "ip_addr")
+    serialPrintKv("ip_addr", c.ipAddr, false);
+  else if (k == "subnet")
+    serialPrintKv("subnet", c.subnet, false);
+  else if (k == "gateway")
+    serialPrintKv("gateway", c.gateway, false);
+  else if (k == "dns1")
+    serialPrintKv("dns1", c.dns1, false);
+  else if (k == "dns2")
+    serialPrintKv("dns2", c.dns2, false);
+  else if (k == "wifi_ssid")
+    serialPrintKv("wifi_ssid", c.wifiSsid, false);
+  else if (k == "wifi_pass")
+    serialPrintKv("wifi_pass", c.wifiPass, !includeSecrets);
+  else if (k == "pusher_chan")
+    serialPrintKv("pusher_chan", c.pusherChan, false);
+  else if (k == "ws_host")
+    serialPrintKv("ws_host", c.wsHost, false);
+  else if (k == "ws_port")
+    serialPrintKv("ws_port", c.wsPort, false);
+  else if (k == "ws_path")
+    serialPrintKv("ws_path", c.wsPath, false);
+  else if (k == "pusher_key")
+    serialPrintKv("pusher_key", c.pusherKey, false);
+  else if (k == "pusher_cluster")
+    serialPrintKv("pusher_cluster", c.pusherCluster, false);
+  else if (k == "discord_en")
+    Serial.printf("discord_en=%s\n", c.discordEnabled ? "true" : "false");
+  else if (k == "discord_url")
+    serialPrintKv("discord_url", c.discordUrl, false);
+  else if (k == "discord_user")
+    serialPrintKv("discord_user", c.discordUsername, false);
+  else if (k == "discord_ev")
+    serialPrintKv("discord_ev", c.discordEvents, false);
+  else if (k == "cpu_mhz")
+    Serial.printf("cpu_mhz=%u\n", c.cpuMhz);
+  else if (k == "loop_delay_ms")
+    Serial.printf("loop_delay_ms=%u\n", c.loopDelayMs);
+  else if (k == "web_pass" || k == "password")
+    serialPrintKv("web_pass", nvsReadPassword(), !includeSecrets);
+  else
+    return false;
+  return true;
+}
+
+void configPrintSerial(bool includeSecrets)
+{
+  DeviceConfig c;
+  nvsLoadConfig(c);
+  Serial.println("[NVS] config:");
+  serialPrintKv("theme_mode", c.themeMode, false);
+  serialPrintKv("net_link", c.netLink.isEmpty() ? "auto" : c.netLink, false);
+  serialPrintKv("ip_mode", c.ipMode, false);
+  serialPrintKv("ip_addr", c.ipAddr, false);
+  serialPrintKv("subnet", c.subnet, false);
+  serialPrintKv("gateway", c.gateway, false);
+  serialPrintKv("dns1", c.dns1, false);
+  serialPrintKv("dns2", c.dns2, false);
+  serialPrintKv("wifi_ssid", c.wifiSsid, false);
+  serialPrintKv("wifi_pass", c.wifiPass, !includeSecrets);
+  serialPrintKv("pusher_chan", c.pusherChan, false);
+  serialPrintKv("ws_host", c.wsHost, false);
+  serialPrintKv("ws_port", c.wsPort, false);
+  serialPrintKv("ws_path", c.wsPath, false);
+  serialPrintKv("pusher_key", c.pusherKey, false);
+  serialPrintKv("pusher_cluster", c.pusherCluster, false);
+  Serial.printf("discord_en=%s\n", c.discordEnabled ? "true" : "false");
+  serialPrintKv("discord_url", c.discordUrl, false);
+  serialPrintKv("discord_user", c.discordUsername, false);
+  serialPrintKv("discord_ev", c.discordEvents, false);
+  Serial.printf("cpu_mhz=%u\n", c.cpuMhz);
+  Serial.printf("loop_delay_ms=%u\n", c.loopDelayMs);
+  serialPrintKv("web_pass", nvsReadPassword(), !includeSecrets);
+}
+
+bool configSetFromSerial(const String &key, const String &value, String &errOut)
+{
+  errOut = "";
+  String k = key;
+  k.trim();
+  k.toLowerCase();
+  String v = value;
+  v.trim();
+
+  if (k == "web_pass" || k == "password")
+  {
+    if (!nvsSavePassword(v))
+    {
+      errOut = "password: 8-64 chars";
+      return false;
+    }
+    return true;
+  }
+
+  DeviceConfig c;
+  nvsLoadConfig(c);
+
+  if (k == "theme_mode")
+  {
+    if (!nvsSaveTheme(v))
+    {
+      errOut = "theme: system|light|dark";
+      return false;
+    }
+    return true;
+  }
+  if (k == "net_link")
+    c.netLink = v;
+  else if (k == "ip_mode")
+    c.ipMode = v;
+  else if (k == "ip_addr")
+    c.ipAddr = v;
+  else if (k == "subnet")
+    c.subnet = v;
+  else if (k == "gateway")
+    c.gateway = v;
+  else if (k == "dns1")
+    c.dns1 = v;
+  else if (k == "dns2")
+    c.dns2 = v;
+  else if (k == "wifi_ssid")
+    c.wifiSsid = v;
+  else if (k == "wifi_pass")
+    c.wifiPass = v;
+  else if (k == "pusher_chan")
+    c.pusherChan = v;
+  else if (k == "ws_host")
+    c.wsHost = v;
+  else if (k == "ws_port")
+    c.wsPort = v;
+  else if (k == "ws_path")
+    c.wsPath = v;
+  else if (k == "pusher_key")
+    c.pusherKey = v;
+  else if (k == "pusher_cluster")
+    c.pusherCluster = v;
+  else if (k == "discord_en")
+    c.discordEnabled = v == "1" || v.equalsIgnoreCase("true") || v.equalsIgnoreCase("yes");
+  else if (k == "discord_url")
+    c.discordUrl = v;
+  else if (k == "discord_user")
+    c.discordUsername = v;
+  else if (k == "discord_ev")
+    c.discordEvents = v;
+  else if (k == "cpu_mhz")
+  {
+    uint32_t mhz = (uint32_t)v.toInt();
+    if (!validateCpuMhz(mhz))
+    {
+      errOut = "cpu_mhz: 80|160|240";
+      return false;
+    }
+    c.cpuMhz = mhz;
+    if (!nvsSavePerformance(c))
+    {
+      errOut = "NVS save failed";
+      return false;
+    }
+    applyCpuMhz(c.cpuMhz);
+    return true;
+  }
+  else if (k == "loop_delay_ms")
+  {
+    uint32_t ms = (uint32_t)v.toInt();
+    if (!validateLoopDelayMs(ms))
+    {
+      errOut = "loop_delay_ms: 0-100";
+      return false;
+    }
+    c.loopDelayMs = ms;
+    if (!nvsSavePerformance(c))
+    {
+      errOut = "NVS save failed";
+      return false;
+    }
+    return true;
+  }
+  else
+  {
+    errOut = "unknown key (help)";
+    return false;
+  }
+
+  if (k == "pusher_chan" || k == "ws_host" || k == "ws_port" || k == "ws_path" || k == "pusher_key" ||
+      k == "pusher_cluster")
+  {
+    if (!nvsSavePusher(c))
+    {
+      errOut = "invalid pusher config";
+      return false;
+    }
+    return true;
+  }
+  if (k == "discord_en" || k == "discord_url" || k == "discord_user" || k == "discord_ev")
+  {
+    if (!nvsSaveDiscord(c))
+    {
+      errOut = "invalid discord config";
+      return false;
+    }
+    return true;
+  }
+
+  if (!nvsSaveNetwork(c))
+  {
+    errOut = "invalid network config";
+    return false;
+  }
+  return true;
 }

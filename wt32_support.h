@@ -7,12 +7,15 @@
 struct DeviceConfig
 {
   String themeMode;
+  String netLink;
   String ipMode;
   String ipAddr;
   String subnet;
   String gateway;
   String dns1;
   String dns2;
+  String wifiSsid;
+  String wifiPass;
   String pusherChan;
   String wsHost;
   String wsPort;
@@ -39,7 +42,11 @@ bool nvsClearAll();
 String nvsReadPassword();
 
 bool validateTheme(const String &s);
+bool validateNetLink(const String &s);
 bool validateIpMode(const String &s);
+bool configSetFromSerial(const String &key, const String &value, String &errOut);
+void configPrintSerial(bool includeSecrets);
+bool configPrintSerialKey(const String &key, bool includeSecrets);
 bool validateIpv4(const String &s);
 bool validatePortString(const String &s, uint16_t &out);
 bool validateChannelName(const String &s);

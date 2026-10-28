@@ -11,7 +11,7 @@
     <div class="topbar">
       <div>
         <h1>PC Control</h1>
-        <div class="sub">ESP32 Ethernet</div>
+        <div class="sub">ESP32 LAN / Wi-Fi</div>
       </div>
       <div class="topbar-ip" id="topbar-ip">()</div>
     </div>
@@ -36,7 +36,14 @@
           <div class="card">
             <h2>Network</h2>
             <div class="stat"><b>Link</b> <span id="st-link">()</span></div>
+            <div class="stat"><b>Active</b> <span id="st-active">()</span></div>
             <div class="stat"><b>IP</b> <span id="st-ip">()</span></div>
+            <div class="stat">
+              <b>Ethernet IP</b> <span id="st-eth-ip">()</span>
+            </div>
+            <div class="stat">
+              <b>Wi-Fi IP</b> <span id="st-wifi-ip">()</span>
+            </div>
             <div class="stat"><b>Gateway</b> <span id="st-gw">()</span></div>
             <div class="stat"><b>Subnet</b> <span id="st-mask">()</span></div>
             <div class="stat"><b>DNS</b> <span id="st-dns">()</span></div>
@@ -146,9 +153,43 @@
         <section id="settings-network" class="section">
           <h2 class="section-title">Settings | Network</h2>
           <div class="card">
-            <h2>IPv4 (Ethernet)</h2>
+            <h2>Link &amp; IPv4</h2>
+            <p class="hint">
+              LAN = Ethernet (WT32). WLAN = Wi-Fi. Auto tries both. Reboot after
+              save. Serial: <code>help</code>, <code>set net_link wifi</code>, …
+            </p>
             <div id="net-msg" class="msg hidden"></div>
             <form id="form-network">
+              <label>Connection</label>
+              <div class="radio-block">
+                <label class="choice">
+                  <input type="radio" name="net_link" value="auto" />
+                  <span><strong>Auto</strong> (Ethernet + Wi-Fi)</span>
+                </label>
+                <label class="choice">
+                  <input type="radio" name="net_link" value="ethernet" />
+                  <span><strong>Ethernet only</strong> (LAN)</span>
+                </label>
+                <label class="choice">
+                  <input type="radio" name="net_link" value="wifi" />
+                  <span><strong>Wi-Fi only</strong> (WLAN)</span>
+                </label>
+              </div>
+              <label for="wifi_ssid">Wi-Fi SSID</label>
+              <input
+                type="text"
+                id="wifi_ssid"
+                name="wifi_ssid"
+                autocomplete="off"
+              />
+              <label for="wifi_pass">Wi-Fi password (empty = keep saved)</label>
+              <input
+                type="password"
+                id="wifi_pass"
+                name="wifi_pass"
+                autocomplete="new-password"
+              />
+              <label>IPv4</label>
               <div class="radio-block">
                 <label class="choice">
                   <input type="radio" name="ip_mode" value="dhcp" />

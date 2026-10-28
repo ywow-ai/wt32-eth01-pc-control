@@ -2,21 +2,21 @@
 
 Tinjauan kode (review statis + compile `esp32:esp32:wt32-eth01`). Bukan pengganti QA hardware di `TODO.md`.
 
-**Tanggal review:** 2026-10-26
+**Tanggal review:** 2026-10-26 · **Doc jaringan/serial:** 2026-10-28 (`README.md`)
 
 ---
 
 ## Ringkasan
 
-| Aspek                      | Penilaian                                      |
-| -------------------------- | ---------------------------------------------- |
-| Struktur & dokumentasi     | Baik — README/TODO selaras dengan implementasi |
-| Loop / opto (jalur normal) | Baik — state machine non-blocking              |
-| Web API & validasi         | Cukup baik — server-side checks ada            |
-| Pusher remote              | **Diperbaiki** — `wt32_pusher_cmd` + path key  |
-| NVS save field kosong      | **Diperbaiki** — empty → `remove` key          |
-| Discord webhook            | **Dimitigasi** — kirim saat opto idle          |
-| Compile                    | OK (~10% flash)                                |
+| Aspek                      | Penilaian                                                   |
+| -------------------------- | ----------------------------------------------------------- |
+| Struktur & dokumentasi     | Baik — README: tutorial LAN/WLAN/serial; TODO QA diperbarui |
+| Loop / opto (jalur normal) | Baik — state machine non-blocking                           |
+| Web API & validasi         | Cukup baik — server-side checks ada                         |
+| Pusher remote              | **Diperbaiki** — `wt32_pusher_cmd` + path key               |
+| NVS save field kosong      | **Diperbaiki** — empty → `remove` key                       |
+| Discord webhook            | **Dimitigasi** — kirim saat opto idle                       |
+| Compile                    | OK (~10% flash)                                             |
 
 Kesimpulan: siap QA hardware setelah password diganti, upload sketch + LittleFS; Discord test masih blocking singkat saat opto idle.
 
