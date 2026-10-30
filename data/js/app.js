@@ -88,12 +88,8 @@
     $("st-heap").textContent = d.free_heap != null ? d.free_heap + " B" : EMPTY;
   }
 
-  function fillConfig(c) {
+  function fillNetworkConfig(c) {
     if (!c) return;
-    if (window.pcThemeApply) window.pcThemeApply(c.theme_mode || "system");
-    if (window.pcThemeSyncRadios)
-      window.pcThemeSyncRadios(c.theme_mode || "system");
-
     var netLink = c.net_link || "auto";
     document.querySelectorAll('input[name="net_link"]').forEach(function (el) {
       el.checked = el.value === netLink;
@@ -104,11 +100,18 @@
     });
     $("wifi_ssid") && ($("wifi_ssid").value = c.wifi_ssid || "");
     $("wifi_pass") && ($("wifi_pass").value = "");
-    $("ip_addr").value = c.ip_addr || "";
-    $("subnet").value = c.subnet || "";
-    $("gateway").value = c.gateway || "";
-    $("dns1").value = c.dns1 || "";
-    $("dns2").value = c.dns2 || "";
+    $("ip_addr") && ($("ip_addr").value = c.ip_addr || "");
+    $("subnet") && ($("subnet").value = c.subnet || "");
+    $("gateway") && ($("gateway").value = c.gateway || "");
+    $("dns1") && ($("dns1").value = c.dns1 || "");
+    $("dns2") && ($("dns2").value = c.dns2 || "");
+  }
+
+  function fillSettingsConfig(c) {
+    if (!c) return;
+    var theme = window.pcThemeStored ? window.pcThemeStored() : "system";
+    if (window.pcThemeApply) window.pcThemeApply(theme);
+    if (window.pcThemeSyncRadios) window.pcThemeSyncRadios(theme);
 
     $("pusher_chan").value = c.pusher_chan || "";
     $("ws_host").value = c.ws_host || "";
@@ -136,9 +139,17 @@
     }
   }
 
-  async function loadConfig() {
+  async function reloadConfigFromDevice() {
     var c = await api("/api/config");
-    fillConfig(c);
+    fillNetworkConfig(c);
+    fillSettingsConfig(c);
+    return c;
+  }
+
+  /** First open: pull NVS form values + dashboard status once (no polling). */
+  async function loadAllFromDevice() {
+    await reloadConfigFromDevice();
+    await refreshStatus();
   }
 
   function wireLogin() {
@@ -192,12 +203,28 @@
         }
         try {
           await api("/api/password", formPost(fd));
+          await reloadConfigFromDevice();
           showMsg($("pw-msg"), "Saved", true);
           e.target.reset();
         } catch (err) {
           showMsg(
             $("pw-msg"),
             (err.body && err.body.error) || "Save failed",
+            false,
+          );
+        }
+      });
+
+    $("btn-dashboard-refresh") &&
+      $("btn-dashboard-refresh").addEventListener("click", async function () {
+        hideMsg($("dash-msg"));
+        try {
+          await refreshStatus();
+          showMsg($("dash-msg"), "Updated", true);
+        } catch (err) {
+          showMsg(
+            $("dash-msg"),
+            (err.body && err.body.error) || "Refresh failed",
             false,
           );
         }
@@ -266,6 +293,7 @@
         }
         try {
           await api("/api/pusher", formPost(fd));
+          await reloadConfigFromDevice();
           showMsg($("push-msg"), "Saved", true);
         } catch (err) {
           showMsg(
@@ -291,6 +319,7 @@
         }
         try {
           await api("/api/discord", formPost(fd));
+          await reloadConfigFromDevice();
           showMsg($("disc-msg"), "Saved", true);
         } catch (err) {
           showMsg(
@@ -354,6 +383,8 @@
         fd.append("loop_delay_ms", String(delayMs));
         try {
           await api("/api/performance", formPost(fd));
+          await reloadConfigFromDevice();
+          await refreshStatus();
           showMsg($("perf-msg"), "Saved", true);
         } catch (err) {
           showMsg(
@@ -400,9 +431,7 @@
   async function bootIndex() {
     try {
       await api("/api/session");
-      await loadConfig();
-      await refreshStatus();
-      setInterval(refreshStatus, 5000);
+      await loadAllFromDevice();
     } catch (_) {
       location.href = "/login.html";
     }

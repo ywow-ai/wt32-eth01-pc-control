@@ -21,6 +21,7 @@ static uint32_t g_factoryHoldStart = 0;
 static bool g_factoryTriggered = false;
 static bool g_factorySeenRelease = false;
 static bool g_pusherStarted = false;
+static bool g_pusherConnectPending = true;
 static uint32_t g_loopDelayMs = DEFAULT_LOOP_DELAY_MS;
 
 static bool sessionValid()
@@ -217,7 +218,6 @@ static String buildConfigJson()
 {
   String j = "{";
   j += "\"ok\":true,";
-  j += "\"theme_mode\":\"" + jsonEscape(g_cfg.themeMode.isEmpty() ? "system" : g_cfg.themeMode) + "\",";
   j += "\"net_link\":\"" + jsonEscape(g_cfg.netLink.isEmpty() ? "auto" : g_cfg.netLink) + "\",";
   j += "\"ip_mode\":\"" + jsonEscape(g_cfg.ipMode.isEmpty() ? "dhcp" : g_cfg.ipMode) + "\",";
   j += "\"wifi_ssid\":\"" + jsonEscape(g_cfg.wifiSsid) + "\",";
@@ -279,25 +279,6 @@ static void handleApiConfig()
   if (!requireAuthApi())
     return;
   sendJson(server, 200, buildConfigJson());
-}
-
-static void handleApiTheme()
-{
-  if (!requireAuthApi())
-    return;
-  String mode = server.arg("theme_mode");
-  if (!validateTheme(mode))
-  {
-    sendJson(server, 400, "{\"ok\":false,\"error\":\"Invalid theme\"}");
-    return;
-  }
-  if (!nvsSaveTheme(mode))
-  {
-    sendJson(server, 500, "{\"ok\":false,\"error\":\"NVS save failed\"}");
-    return;
-  }
-  g_cfg.themeMode = mode;
-  sendJson(server, 200, "{\"ok\":true}");
 }
 
 static void handleApiStatus()
@@ -606,7 +587,6 @@ static void setupWebRoutes()
   server.on("/api/login", HTTP_POST, handleApiLogin);
   server.on("/api/logout", HTTP_POST, handleApiLogout);
   server.on("/api/config", HTTP_GET, handleApiConfig);
-  server.on("/api/theme", HTTP_POST, handleApiTheme);
   server.on("/api/status", HTTP_GET, handleApiStatus);
   server.on("/api/press", HTTP_POST, handleApiPress);
   server.on("/api/password", HTTP_POST, handleApiPassword);
@@ -662,19 +642,20 @@ void setup()
   optoInit();
 
   Serial.begin(SERIAL_BAUD);
-  delay(200);
-
-  g_fsOk = LittleFS.begin(false);
-  if (!g_fsOk)
-    Serial.println("[FS] LittleFS mount failed (upload data/ image)");
+  delay(1000);
 
   loadConfig();
-  discordWorkerInit();
   if (g_cfg.themeMode.isEmpty())
     g_cfg.themeMode = "system";
   Serial.printf("[BOOT] pc_control LAN/WLAN (CPU %u MHz, loop %u ms)\n", g_cfg.cpuMhz, g_loopDelayMs);
 
   netBegin(g_cfg);
+
+  g_fsOk = LittleFS.begin(false);
+  if (!g_fsOk)
+    Serial.println("[FS] LittleFS mount failed (upload data/ image)");
+
+  discordWorkerInit();
   setupWebRoutes();
   {
     static const char *headerKeys[] = {"Cookie"};
@@ -682,7 +663,6 @@ void setup()
   }
   server.begin();
 
-  pusherReconnect();
   serialCmdPrintBootHint();
 
   Serial.println("[WEB] HTTP :80 session cookie (browser close = re-login)");
@@ -690,6 +670,12 @@ void setup()
 
 void loop()
 {
+  netPoll();
+  if (g_pusherConnectPending && netHasIp())
+  {
+    g_pusherConnectPending = false;
+    pusherReconnect();
+  }
   server.handleClient();
   serialCmdPoll();
   optoPoll();

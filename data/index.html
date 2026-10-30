@@ -35,6 +35,20 @@
           <h2 class="section-title">Dashboard</h2>
           <div class="card">
             <h2>Network</h2>
+            <p class="hint">
+              Loaded once when you open the page. Refresh updates live status
+              only.
+            </p>
+            <div id="dash-msg" class="msg hidden"></div>
+            <div class="btn-row" style="margin-bottom: 0.75rem">
+              <button
+                type="button"
+                class="btn btn-secondary"
+                id="btn-dashboard-refresh"
+              >
+                Refresh
+              </button>
+            </div>
             <div class="stat"><b>Link</b> <span id="st-link">()</span></div>
             <div class="stat"><b>Active</b> <span id="st-active">()</span></div>
             <div class="stat"><b>IP</b> <span id="st-ip">()</span></div>
@@ -132,7 +146,7 @@
           <h2 class="section-title">Settings | Appearance</h2>
           <div class="card">
             <h2>Theme</h2>
-            <p class="hint">Saved to device NVS.</p>
+            <p class="hint">Saved in this browser only (localStorage).</p>
             <div class="radio-block" id="form-appearance">
               <label class="choice">
                 <input type="radio" name="theme_mode" value="system" />

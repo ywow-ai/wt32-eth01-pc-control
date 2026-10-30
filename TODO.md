@@ -26,7 +26,7 @@
 - [x] Pusher JSON + plain `press,...` (`wt32_pusher_cmd`)
 - [x] Discord webhook (queue + FreeRTOS task, filter `discord_ev`)
 - [x] Network NVS + reboot apply
-- [x] Theme NVS
+- [x] Theme — browser localStorage (`theme-init.js` / `theme.js`)
 - [x] **Ethernet + Wi‑Fi** (`wt32_net`); Wi‑Fi `WIFI_PS_NONE` untuk latency
 - [x] **Serial NVS** (`help`, `set`, `show`, `reboot`)
 - [x] Performance default **160 MHz**, **5 ms** loop delay
@@ -40,9 +40,11 @@
 ## Deploy production (hardware)
 
 - [x] `./deploy.sh` atau langkah manual di README
+- [x] **`./test_production.sh`** — smoke API + serial (lihat README)
+- [x] **LAN direct:** `NET_LINK=ethernet`, `IP_MODE=static`, `IP_ADDR=192.168.1.201`, laptop `eth0` **192.168.1.100/24**; C3 **`low io1`** setelah flash
 - [x] **`NET_LINK=wifi`** + SSID di `.env` jika PHY Ethernet tidak dipakai
 - [ ] Ganti **password web** default setelah login pertama
-- [ ] Ethernet (jika PHY OK): DHCP router → `[ETH] IP`
+- [ ] Manual: **opto** (`/api/press`), **Pusher** (`push_pusher.sh`), **Discord** test webhook
 
 ## Referensi
 

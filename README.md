@@ -23,7 +23,7 @@ Programming: **FT232H** (UART) atau adapter USB‑serial 3,3 V. Operasi: **HTTP*
 ## Production deploy (satu alur)
 
 1. Salin `.env.example` → `.env` — isi **`WLAN_SSID`**, **`WLAN_PASS`**, **`NET_LINK=wifi`**, Pusher, Discord (opsional).
-2. Wiring upload: FT232H + (opsional) C3 [`esp32c3-gpio`](../esp32c3-gpio) untuk flash otomatis.
+2. Wiring upload: FT232H + C3 [`esp32-gpio`](../esp32-gpio) (board `esp32c3`) atau [`esp32c3-gpio`](../esp32c3-gpio) untuk flash otomatis.
 3. Jalankan:
 
 ```bash
@@ -40,6 +40,15 @@ Setelah online: login web → tes **Power** / **Restart** → `./push_pusher.sh`
 
 Checklist: `TODO.md` · riwayat review: `REVISION.md`.
 
+Setelah deploy, smoke test API + serial:
+
+```bash
+chmod +x test_production.sh
+./test_production.sh http://192.168.1.201
+```
+
+(Tes **opto** `/api/press`, **Pusher**, **Discord** — manual; flag `--hardware` belum ada.)
+
 ---
 
 ## Tutorial 1 — Flash firmware & UI
@@ -55,7 +64,7 @@ Checklist: `TODO.md` · riwayat review: `REVISION.md`.
 
 **Upload manual:** GPIO0 → GND → **EN** → upload → lepas GPIO0 → **EN**.
 
-**Upload otomatis (C3 [`esp32c3-gpio`](../esp32c3-gpio) + FT232H):** tidak perlu lepas/colok GPIO0/EN WT32.
+**Upload otomatis (C3 [`esp32-gpio`](../esp32-gpio) / [`esp32c3-gpio`](../esp32c3-gpio) + FT232H):** tidak perlu lepas/colok GPIO0/EN WT32.
 
 | ESP32-C3 | WT32                                       |
 | :------- | :----------------------------------------- |
@@ -63,7 +72,7 @@ Checklist: `TODO.md` · riwayat review: `REVISION.md`.
 | **io3**  | **EN** (pulse `high io3 150`)              |
 | GND      | GND (+ FT232H GND)                         |
 
-Data flash: **FT232H** → RX0/TX0 (`/dev/ttyUSB0`). C3: `/dev/ttyACM0` (firmware C3 generic `high`/`low` saja).
+Data flash: **FT232H** → RX0/TX0 (`/dev/ttyUSB0`). C3: `/dev/ttyACM0` — firmware `esp32-gpio` (`./compile.sh compile esp32c3`), perintah `high`/`low`/`high io3 150`. Skrip `flash_wt32.sh` menahan **io1** saat esptool ( `--before no-reset` ).
 
 ```bash
 arduino-cli compile --fqbn esp32:esp32:wt32-eth01 \
@@ -179,11 +188,25 @@ reboot
 
 ### 2.5 Auto — LAN + Wi‑Fi
 
-- **`net_link auto`** + SSID terisi → keduanya dicoba.
+- **`net_link auto`:** Ethernet di-init dulu (LAN8720 eksplisit); **Wi‑Fi baru start setelah ~15 s** jika LAN belum dapat IP (hindari bentrok init).
 - Dashboard menampilkan **Ethernet IP** dan **Wi‑Fi IP** jika keduanya hidup.
 - `[alive]` di serial menampilkan IP utama; jika keduanya up, baris tambahan untuk Wi‑Fi.
 
-### 2.6 Kabel langsung modul ↔ laptop (tanpa router)
+### 2.6 Static direct laptop ↔ WT32 (192.168.1.x)
+
+Tanpa router — pola yang sama dengan sketch penjual / `eth_test/`:
+
+| Perangkat     | IP                                           |
+| :------------ | :------------------------------------------- |
+| Laptop `eth0` | **192.168.1.100/24**                         |
+| WT32          | **192.168.1.201** (contoh di `.env.example`) |
+
+1. Salin `.env.example` → `.env`, set `NET_LINK=ethernet`, `IP_MODE=static`, `IP_ADDR=192.168.1.201`, gateway/subnet/DNS `192.168.1.1`.
+2. Flash firmware + LittleFS, lalu `./apply_env.sh` → `reboot`.
+3. Atur `eth0` laptop ke subnet yang sama (NetworkManager manual atau `nmcli`).
+4. Browser: **`http://192.168.1.201/`** (password default NVS).
+
+### 2.7 Kabel langsung modul ↔ laptop (DHCP laptop `eth0-dhcp.sh`)
 
 Untuk tes DHCP dari laptop:
 
@@ -199,7 +222,7 @@ Untuk tes DHCP dari laptop:
 3. Modul: `net_link ethernet`, `ip_mode dhcp`, kabel LAN ke **eth0** laptop.
 4. Reset modul → serial `[ETH] IP 192.168.99.x` → browser `http://192.168.99.x/`.
 
-### 2.7 Troubleshooting jaringan
+### 2.8 Troubleshooting jaringan
 
 | Gejala serial                               | Langkah                                                                                    |
 | :------------------------------------------ | :----------------------------------------------------------------------------------------- |
@@ -246,7 +269,7 @@ Pusher: setelah `set ws_host ...` dll., firmware **reconnect Pusher** otomatis (
 4. **PC control** — **Power**, **Power (hold)**, **Restart** (opto GPIO13/14).
 5. **Settings**
    - **Password** — min 8 karakter.
-   - **Appearance** — theme.
+   - **Appearance** — theme (hanya **localStorage** browser, key `pc-control-theme`).
    - **Network** — `net_link`, Wi‑Fi, IPv4 → **Save network** → reboot.
    - **Pusher / Discord** — remote & notifikasi.
 6. **System** — restart ESP; Clear NVS (web). **Factory:** GPIO35 ke GND **~5 s** (lepas dulu, lalu hold).
@@ -279,7 +302,6 @@ Semua `/api/*` butuh cookie sesi, **kecuali** `POST /api/login` dan `GET /api/se
 | GET    | `/api/session`       | Cek sesi                                              |
 | GET    | `/api/config`        | Isi form settings                                     |
 | GET    | `/api/status`        | Dashboard (termasuk `eth_ip`, `wifi_ip`, `active_if`) |
-| POST   | `/api/theme`         | Theme NVS                                             |
 | POST   | `/api/password`      | Password NVS                                          |
 | POST   | `/api/network`       | Simpan network → reboot                               |
 | POST   | `/api/network/renew` | Renew DHCP → reboot                                   |

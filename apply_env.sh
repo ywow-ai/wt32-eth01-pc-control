@@ -16,12 +16,22 @@ source "$ENV_FILE"
 set +a
 
 PORT="${WT32_SERIAL_PORT:-/dev/ttyUSB0}"
+C3_PORT="${C3_PORT:-/dev/ttyACM0}"
+C3_EN="${C3_EN:-io3}"
+EN_MS="${EN_MS:-150}"
 BAUD=115200
 
 if [[ ! -e "$PORT" ]]; then
   echo "Serial port not found: $PORT"
   exit 1
 fi
+
+c3_pulse_en() {
+  [[ -e "$C3_PORT" ]] || return 0
+  stty -F "$C3_PORT" "$BAUD" cs8 -cstopb -parenb raw -echo min 0 time 0 2>/dev/null || true
+  printf 'high %s %s\n' "$C3_EN" "$EN_MS" >"$C3_PORT"
+  sleep 0.2
+}
 
 stty -F "$PORT" "$BAUD" cs8 -cstopb -parenb raw -echo 2>/dev/null || true
 
@@ -48,6 +58,9 @@ if [[ -n "${WLAN_SSID:-}" ]]; then
 fi
 
 IPM="${IP_MODE:-dhcp}"
+if [[ -n "${IP_ADDR:-}" && "$IPM" == "dhcp" ]]; then
+  IPM="static"
+fi
 serial_set ip_mode "$IPM"
 [[ -n "${IP_ADDR:-}" ]] && serial_set ip_addr "$IP_ADDR"
 [[ -n "${SUBNET:-}" ]] && serial_set subnet "$SUBNET"
@@ -86,6 +99,8 @@ serial_cmd "set loop_delay_ms $LOOP_DELAY_MS"
 
 echo "[env] reboot WT32 ..."
 serial_cmd reboot
+sleep 0.15
+c3_pulse_en
 
 echo "[env] waiting for [alive] (up to 45s) ..."
 python3 - "$PORT" "$BAUD" <<'PY'

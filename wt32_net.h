@@ -3,6 +3,7 @@
 #include "wt32_support.h"
 
 void netBegin(const DeviceConfig &cfg);
+void netPoll();
 void netUpdateLed();
 
 bool netEthHasIp();
